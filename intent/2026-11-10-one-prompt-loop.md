@@ -1,5 +1,5 @@
 ---
-status: draft # draft → approved → planned → building → verified → shipped (PR #n)
+status: approved (owner answers 2026-11-10, "merge proactively" 2026-11-11) # draft → approved → planned → building → verified → shipped (PR #n)
 ---
 # One prompt runs the coding loop to the goal, and stops when something fails twice
 
