@@ -1,4 +1,4 @@
-# roles-assign
+# coding-playbook
 
 Which model does which job in a Claude Code setup, how work is handed from one role to another, and the skills that go with it. Everything here installs into `~/.claude`.
 

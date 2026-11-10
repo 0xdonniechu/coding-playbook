@@ -309,9 +309,9 @@ for args, code, stream in ((["--help"], 0, "stdout"), (["-h"], 0, "stdout"), (["
             fail(f"install.py {' '.join(args)}: expected exit {code}, usage on {stream} and nothing written; "
                  f"got exit {out.returncode}, wrote {sorted(p.name for p in Path(home).iterdir())}")
 
-# An earlier install's block (coding-playbook or claudecode-guide markers) is taken over, never duplicated: the reviewer
-# of the coding-playbook sync found a second full block appended (2026-11-10). Temporary HOME again.
-for legacy in ("coding-playbook", "claudecode-guide"):
+# An earlier install's block (roles-assign or claudecode-guide markers) is taken over, never duplicated: the reviewer
+# of the roles-assign sync found a second full block appended (2026-11-10). Temporary HOME again.
+for legacy in ("roles-assign", "claudecode-guide"):
     with tempfile.TemporaryDirectory() as home:
         env = {k: v for k, v in os.environ.items() if not k.startswith(("XDG_", "CLAUDE"))
                and k not in ("HOMEDRIVE", "HOMEPATH")} | {"HOME": home, "USERPROFILE": home}
@@ -322,10 +322,10 @@ for legacy in ("coding-playbook", "claudecode-guide"):
         out = subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), "--global"], env=env,
                              capture_output=True, text=True, timeout=120)
         text = (claude / "CLAUDE.md").read_text(encoding="utf-8")
-        if out.returncode != 0 or text.count("<!-- roles-assign:begin -->") != 1 or text.count("<!-- roles-assign:end -->") != 1 \
+        if out.returncode != 0 or text.count("<!-- coding-playbook:begin -->") != 1 or text.count("<!-- coding-playbook:end -->") != 1 \
                 or f"<!-- {legacy}:" in text or "old block text" in text or "keep me" not in text or "# mine" not in text:
-            fail(f"install.py --global over a '{legacy}' block: expected one roles-assign block, the old one gone and "
-                 f"the owner's text kept; got exit {out.returncode}, {text.count('roles-assign:begin')} block(s)")
+            fail(f"install.py --global over a '{legacy}' block: expected one coding-playbook block, the old one gone and "
+                 f"the owner's text kept; got exit {out.returncode}, {text.count('coding-playbook:begin')} block(s)")
 
 if failures:
     print("FAIL")
