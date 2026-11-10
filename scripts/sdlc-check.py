@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks the sdlc chain's artifacts.
+"""Checks the sdlc chain's artifacts (APS-51).
 
     python3 scripts/sdlc-check.py clarify <intent.md>
     python3 scripts/sdlc-check.py converge <plan.md> [--base <ref>]
@@ -10,7 +10,7 @@ is missing or does not begin with `None`. Run it before the intent goes to `appr
 
 `converge` compares a plan with its branch: the paths changed since the merge base with `--base` (default
 `origin/main`, else `main`), the working tree and untracked files included. Each gap is one line:
-  - a changed path that no task allows (inside `allow`, outside `forbid`), other than the
+  - a changed path that no task allows (agent-guard's own rule: inside `allow`, outside `forbid`), other than the
     plan and its intent;
   - a task, not marked `not needed`, whose `allow` matches no changed path;
   - a Proof item with no Result item, or a Result item that does not begin with PASS, FAIL or `not run: <reason>`.
@@ -20,6 +20,7 @@ The formats are in the sdlc skill (`skills/sdlc/SKILL.md`). `dispatch.py --task`
 here. Exit 0: pass; 1: a gap or a marker; 2: the file cannot be read as the format says (nothing is guessed).
 It never edits a file. Standard library only.
 """
+import importlib.util
 import re
 import subprocess
 import sys
@@ -27,9 +28,6 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.dont_write_bytecode = True  # no __pycache__ beside the scripts
-import contract as contract_module  # noqa: E402
 HEADING = re.compile(r"^### (T\d+) \((builder|main)(, parallel)?\) (\S.*)$")
 TICKED = re.compile(r"`([^`]+)`")
 RESULT = re.compile(r"^(PASS|FAIL|not run: \S)")
@@ -144,6 +142,18 @@ def clarify(text):
     return gaps
 
 
+def guard():
+    spec = importlib.util.spec_from_file_location("agent_guard", ROOT / "hooks" / "agent-guard.py")
+    module = importlib.util.module_from_spec(spec)
+    dont = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = dont
+    return module
+
+
 def git(top, *args):
     out = subprocess.run(["git", "-C", str(top), *args], capture_output=True, text=True)
     if out.returncode != 0:
@@ -177,7 +187,7 @@ def converge(plan_path, base=None):
     own = {plan_path.relative_to(top).as_posix()}
     if plan_path.name.endswith(".plan.md"):
         own.add(plan_path.relative_to(top).as_posix()[: -len(".plan.md")] + ".md")
-    in_contract = contract_module.in_contract
+    in_contract = guard().in_contract
     live = [t for t in tasks if not t["not_needed"]]
     contracts = {t["id"]: {"allow": t["allow"], "forbid": t["forbid"]} for t in live}
     notes, gaps = [f"{len(paths)} changed path(s) since the merge base with {base}"], []

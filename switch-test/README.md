@@ -21,10 +21,10 @@ On release day, follow `RELEASE-DAY.md`.
 
 | case | repo, range | rating | original reviewer | known |
 |---|---|---|---|---|
-| `aps32-guard` | coding-playbook `d5bc1dc..ea89167` | HARD | Fable 5.1, FAIL | 1 MAJOR, 6 MINOR |
-| `aps34-boundary` | coding-playbook `bcc4708..852a39a` | HARD | Fable 5.1, FAIL | 3 MAJOR, 4 MINOR, 1 NIT |
+| `aps32-guard` | roles-assign `d5bc1dc..ea89167` | HARD | Fable 5.1, FAIL | 1 MAJOR, 6 MINOR |
+| `aps34-boundary` | roles-assign `bcc4708..852a39a` | HARD | Fable 5.1, FAIL | 3 MAJOR, 4 MINOR, 1 NIT |
 | `asp18-overview` | ambysto-space `266e95c..8f0356d` | MEDIUM | Opus 5.5, FAIL | 2 MAJOR, 2 MINOR |
-| replay `aps37-token-guard` | coding-playbook from `d33a160` (original commit `1f8064f`) | HARD | Fable 5.1, FAIL | 2 MAJOR, 5 MINOR |
+| replay `aps37-token-guard` | roles-assign from `d33a160` (original commit `1f8064f`) | HARD | Fable 5.1, FAIL | 2 MAJOR, 5 MINOR |
 
 Cases 1-3 were first found by Fable 5.1, so its baseline repeats its own review of the same diff in a new run. That
 is a fair floor for "catches at least as many"; Opus 5.5 on the same cases shows what a different model catches.
@@ -52,7 +52,7 @@ python3 scripts/switch-test.py void-check ~/.cache/model-switch-runs/<run>/<case
 - **The replay** runs the candidate as main session with the autonomous-run settings (the boundary hook), on a branch
   `replay` in the clone, then the fixed reviewer (`replay_reviewer`, Fable 5.1, a different model from both Opus 5.5
   and the candidate) reviews its commit at `high`. One round of that review, no fixes after it. Before committing,
-  the replay runs the HARD loop the global rules give every main session: it may call `hard-reviewer` (Fable 5.1, from
+  the replay runs the HARD loop the global rules give every main session: it may call `hard-reviewer` (Fable 5.1 when the baseline was recorded, Fable 5.2 since 2026-11-10; from
   `~/.claude/agents`) and fix, as the Opus 5.5 baseline did (two rounds). So its commit is the loop's output, and the
   replay's `review_task` is the kit's own, the same for every replay (`case.json` `prompt_edits`): compare candidate
   replays with each other; the original author's first-round numbers in `known.md` are context, not a like-for-like

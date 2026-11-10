@@ -27,6 +27,9 @@ ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home() / ".claude"
 BOM = chr(0xFEFF)  # written as a code point so editors cannot strip it
 BEGIN, END = "<!-- roles-assign:begin -->", "<!-- roles-assign:end -->"
+# Markers of earlier installs of this block: a block between exactly one such pair is taken over, not duplicated.
+LEGACY = [("<!-- coding-playbook:begin -->", "<!-- coding-playbook:end -->"),
+          ("<!-- claudecode-guide:begin -->", "<!-- claudecode-guide:end -->")]
 check_only = "--check" in sys.argv
 with_global = "--global" in sys.argv
 with_settings = "--settings" in sys.argv
@@ -115,7 +118,14 @@ else:
     nl = "\r\n" if "\r\n" in current else "\n"
     guide = (ROOT / "global" / "CLAUDE.md").read_text(encoding="utf-8").rstrip()
     block = nl.join([BEGIN, *guide.splitlines(), END])
+    original = current  # the file as it is on disk; a taken-over legacy block makes `current` differ from it
     b, e = current.count(BEGIN), current.count(END)
+    if b == 0 and e == 0:
+        for old_begin, old_end in LEGACY:
+            if current.count(old_begin) == 1 and current.count(old_end) == 1 and current.index(old_begin) < current.index(old_end):
+                current = current.replace(old_begin, BEGIN).replace(old_end, END)
+                b, e = 1, 1
+                break
     if b == 0 and e == 0:
         installed = False
         updated = (current.rstrip("\r\n") + nl + nl if current.strip() else "") + block + nl
@@ -132,7 +142,7 @@ else:
         if with_global or check_only:
             refuse(msg)
         print(f"skipped    {msg}")
-    elif updated == current:
+    elif updated == original:
         print(f"unchanged  {claude_md} (global block)")
     elif not installed and not with_global:
         print(f"not set    {claude_md} (global block not installed; optional, run with --global)")

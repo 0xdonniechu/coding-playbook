@@ -2,7 +2,8 @@
 
 ## Model economy
 The main session runs the model with the best quality per cost for deciding, rating, gating and HARD work. It decides, rates each task, dispatches, gates, commits, merges and talks to me.
-**Current choice (2026-11-10): Opus 5.5.** Fable 5.2 (owner decision 2026-11-10) as hard-reviewer. The switch test was skipped for Fable 5.2 by the owner's decision, so the main session was not re-compared with it. Revisit the next time a model ships, by the switch test below.
+**Current choice (2026-10-16): Opus 5.5.** On cost/quality it is ahead of Fable 5.1. Revisit when the next model ships, by the switch test below.
+Switch (2026-11-10): hard-reviewer → Fable 5.2 (`claude-fable-5-2`); owner decision, the switch test was skipped, so the main session was not re-compared with Fable 5.2
 
 Where each setting lives (CLAUDE.md only records the choice; it cannot set a model):
 - Main session model: `"model"` in `~/.claude/settings.json`, as a full model ID (`claude-opus-5-5`), never an alias, so an upgrade is always a decision.
@@ -26,7 +27,7 @@ Rate on four axes: ambiguity, coupled decisions, verifiability, cost of error.
 Each project's CLAUDE.md lists its own HARD / MEDIUM / EASY examples; those override this default.
 
 ## The loop
-- Every builder dispatch carries a task contract, written with `scripts/dispatch.py` in the roles-assign repo: `new <repo> <branch> --allow … --check …` gives a builder that runs beside another its own worktree and contract; `contract <tree> --allow … --check …` serves a single builder in the main checkout. agent-guard refuses the builder's writes outside the contract (and all writes without one) and locks the run when anything changes outside it. The main session reruns the contract's checks as its gate before review, judges an `OUTSIDE CONTRACT` report before anything else, and runs `dispatch.py done <tree>` when the work is committed.
+- Every builder dispatch carries a task contract, written with `scripts/dispatch.py` in the roles-assign repo (`~/work/0xdonniechu/roles-assign`): `new <repo> <branch> --allow … --check …` gives a builder that runs beside another its own worktree and contract; `contract <tree> --allow … --check …` serves a single builder in the main checkout. agent-guard refuses the builder's writes outside the contract (and all writes without one) and locks the run when anything changes outside it. The main session reruns the contract's checks as its gate before review, judges an `OUTSIDE CONTRACT` report before anything else, and runs `dispatch.py done <tree>` when the work is committed.
 - When the plan has a `## Tasks` section (the sdlc skill), a builder's contract comes from its task: `dispatch.py new <repo> <branch> --task <plan> <id>` (or `contract <tree> --task …`), not from flags typed again.
 - Before the review of a plan's build, `scripts/sdlc-check.py converge <plan>` lists every changed file outside the plan's tasks, every task left untouched and every Proof item without a result; the reviewer gets its output with the diff. `sdlc-check.py clarify <intent>` fails while an intent still has an open point.
 - The reviewer gets the task and the diff, not the builder's or the main session's summary.
@@ -40,7 +41,7 @@ Each project's CLAUDE.md lists its own HARD / MEDIUM / EASY examples; those over
 - `kind`, by design: `decision` (the owner answers a question about what to build or how), `approval` (the owner accepts an intent, plan or change as written), `merge` (the owner asks to commit, push, merge or tag), `direction` (the owner brings new scope or steering nobody asked for). To reduce: `setup` (an owner-only step: sign-in, token, device), `incident` (something broken), `unblock` (the agent had stopped and needed a nudge), `status` (the owner had to ask where things stand).
 - `trigger`: `agent-asked` when the session asked the owner (a question, a request for approval, an owner-only step), `owner` when the owner started it. A reply to a question is `agent-asked`, even when it also adds steering.
 - An incident the owner noticed first (`incident`, `owner`) is the signal that matters. After the fix, ask whether a gate would have caught it. If the lesson holds only for that project, it goes in the project's CLAUDE.md. If it holds across projects, propose it for the working practice below. Either way it is guidance first, and becomes a gate only when the project decides so.
-- The report: `python scripts/hil-report.py [--since YYYY-MM-DD] [--project P]` in the roles-assign repo.
+- The report: `python scripts/hil-report.py [--since YYYY-MM-DD] [--project P]` in the roles-assign repo (`~/work/0xdonniechu/roles-assign`).
 
 ## Shared memory
 Ambysto repos share one owner-reviewed memory in `~/work/ambysto/ambysto-memory` (its `AGENTS.md` says how to use it). Do not use Claude Code's per-folder auto-memory (turn it off with `"autoMemoryEnabled": false` in `~/.claude/settings.json`).
@@ -63,9 +64,9 @@ Ambysto repos share one owner-reviewed memory in `~/work/ambysto/ambysto-memory`
 - One hosting login per org: before any deploy, check that the project's link (Vercel `.vercel/project.json` `orgId`) is the repo's own org, and deploy production once when the work is done or let git deploy on merge, never after every edit (lesson 2026-10-22: two agents deployed another org's site into the Ambysto Vercel team 64 times in a day, 30 of them from one unchanged commit, and used up its 100/day limit).
 
 ## Switching models (when a new model ships)
-1. Pick 2-3 past diffs whose review findings are on record (review logs, PR comments), including at least one HARD change. The prepared cases, runner and release-day checklist are in the roles-assign repo, `switch-test/`.
+1. Pick 2-3 past diffs whose review findings are on record (review logs, PR comments), including at least one HARD change. The prepared cases, runner and release-day checklist are in the roles-assign repo (`~/work/0xdonniechu/roles-assign`), `switch-test/`.
 2. Run the candidate as reviewer on each diff, without the old findings. Count the known issues it catches, the new real issues it finds, the false alarms, and the cost.
-3. Switch only if it catches at least as many known issues at an acceptable cost. Then change `settings.json`, the effort entry and every agent file in one edit, and update the "Current choice" line with the date and the numbers (`scripts/switch-model.py` in the roles-assign repo makes the repo's part of that edit in one command).
+3. Switch only if it catches at least as many known issues at an acceptable cost. Then change `settings.json`, the effort entry and every agent file in one edit, and update the "Current choice" line with the date and the numbers (`scripts/switch-model.py` in the roles-assign repo (`~/work/0xdonniechu/roles-assign`) makes the repo's part of that edit in one command).
 
 ## Honesty
 - Never report a check as passing that was not run. Write "not run: <reason>" (wrong OS, owner-only step, missing credentials).
