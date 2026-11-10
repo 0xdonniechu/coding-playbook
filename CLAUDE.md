@@ -39,5 +39,5 @@ The four subagents (builder, reviewer, hard-reviewer, transcriber), the global i
 `HANDOFF.md` (gitignored) holds only where the current goal stands. Plans, decisions and dead ends go in files, not in the chat.
 
 ## Open
-- The switch-test cases and replays are diffs from `ambysto/claudecode-guide`; their runner needs a clone of it at `~/work/ambysto/claudecode-guide`. Keep that clone, or the kit cannot replay them.
-- `intent/` and `docs/` are the history of these files as they were made in `claudecode-guide`.
+- The switch-test cases and replays are diffs from `ambysto/coding-playbook`; their runner needs a clone of it at `~/work/ambysto/coding-playbook`. Keep that clone, or the kit cannot replay them.
+- `intent/` and `docs/` are the history of these files as they were made in `coding-playbook`.

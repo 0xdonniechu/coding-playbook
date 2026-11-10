@@ -1,6 +1,6 @@
 {
   "kind": "review",
-  "repo": "ambysto/claudecode-guide",
+  "repo": "ambysto/coding-playbook",
   "base": "d5bc1dc",
   "head": "ea89167",
   "rating": "HARD",
