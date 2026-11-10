@@ -24,8 +24,8 @@ BUILD_HOOKS = [("PreToolUse", "*", "build"), ("PostToolUse", "Bash|PowerShell|Ed
                ("Stop", None, "build-stop")]  # the task contract (APS-46); scripts/dispatch.py writes it
 GUARDED = {"builder": BUILD_HOOKS, "reviewer": REVIEW_HOOKS, "hard-reviewer": REVIEW_HOOKS}
 TEMPLATE_SECTIONS = ["## What it does", "## Verify", "## HARD", "## MEDIUM", "## EASY", "## Rules", "## Read when", "## Session state"]
-SKILLS = {"starter-kit", "handoff", "sdlc", "market-research", "teardown", "orca-worktree-setup"}
-HAND_INVOKED = {"orca-worktree-setup"}  # own skills that settings-defaults.json may set to user-invocable-only
+SKILLS = {"starter-kit", "handoff", "sdlc", "teardown", "orca-worktree-setup", "agent-team", "create-skill", "secrets", "whats-next"}
+HAND_INVOKED = {"orca-worktree-setup", "agent-team", "create-skill"}  # own skills that settings-defaults.json may set to user-invocable-only
 DEFAULT_KEYS = {"enabledPlugins", "skillOverrides"}
 OVERRIDES = {"on", "name-only", "user-invocable-only", "off"}
 DESCRIPTION_LIMIT = 1024  # the Agent Skills spec maximum; Claude Code's own cut-off is higher

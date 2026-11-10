@@ -14,7 +14,10 @@ Which model does which job in a Claude Code setup, how work is handed from one r
 | `global/settings-defaults.json` | `~/.claude/settings.json`, with `--settings` | The `enabledPlugins` and `skillOverrides` every machine shares |
 | `skills/starter-kit/` | `~/.claude/skills/` | `/starter-kit`, run once per repo: `CLAUDE.md` from the template, git identity, only the plugins, MCP servers and skills the repo needs. Invoked by hand only |
 | `skills/handoff/` | `~/.claude/skills/` | `/handoff`: `save` writes where the work stands to `HANDOFF.md` before `/clear`; `resume` reads it in the new session |
-| `skills/market-research/` | `~/.claude/skills/` | Decision-oriented, source-traceable research on markets, competitors, pricing and vendors, with a positioning chart script |
+| `skills/agent-team/` | `~/.claude/skills/` | A one-approval run-to-done playbook: build, independent review, fix, merge, verify, with role agents across waves (hand-invoked in the defaults) |
+| `skills/create-skill/` | `~/.claude/skills/` | Turn a recurring job into a skill from a one-page template, trial it, with an eval and a feedback log (hand-invoked in the defaults) |
+| `skills/secrets/` | `~/.claude/skills/` | Keep API keys and passwords safe when delegating work to an agent, and push code to GitHub without leaking anything |
+| `skills/whats-next/` | `~/.claude/skills/` | Triage the session: sweep for unfinished work, propose next steps and the dependencies of large changes; read and propose only |
 | `skills/teardown/` | `~/.claude/skills/` | Decompose an existing product, write a clean-room spec, then build from the spec only |
 | `skills/orca-worktree-setup/` | `~/.claude/skills/` | Setup scripts so every new Orca worktree gets the gitignored local files it needs |
 | `skills/sdlc/` | `~/.claude/skills/` | The artifact chain intent, plan, build, verify, ship; a plan's `## Tasks` section feeds the builder's contract |
@@ -47,4 +50,4 @@ The builder's task contract is enforced by `agent-guard`: an edit outside it is 
 
 ## Sources
 
-`market-research` and `teardown` started from skills by Son Piaz (MIT, (c) 2026 Son Piaz; licence in `skills/LICENSE-adapted-skills`), then changed from real use.
+`teardown`, `sdlc`, `agent-team`, `create-skill`, `secrets` and `whats-next` started from skills by Son Piaz (MIT, (c) 2026 Son Piaz; licence in `skills/LICENSE-adapted-skills`), then changed from real use.
