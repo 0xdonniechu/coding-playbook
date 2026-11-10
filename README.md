@@ -1,20 +1,38 @@
 # roles-assign
 
-The `/starter-kit` skill for Claude Code: run once per repo to keep sessions small. It writes a short `CLAUDE.md` from a template, sets the git identity, turns on only the plugins, MCP servers and skills the repo needs, gitignores `HANDOFF.md`, and creates a tracker project if you want one.
+Which model does which job in a Claude Code setup, how work is handed from one role to another, and the skills that go with it. Everything here installs into `~/.claude`.
 
-## Layout
+## What is in it
 
-| File | What it is |
-|---|---|
-| `skills/starter-kit/SKILL.md` | The skill. Invoked by hand only, so it costs no context. |
-| `skills/starter-kit/context-config.md` | What each turn carries and how to turn things off globally and per repo. |
-| `skills/starter-kit/project-CLAUDE.md` | The `CLAUDE.md` template the skill fills in. |
+| File | Installs to | What it is |
+|---|---|---|
+| `agents/builder.md` | `~/.claude/agents/` | Sonnet 5.5: implements an approved plan step; edits the working tree only |
+| `agents/reviewer.md` | `~/.claude/agents/` | Opus 5.5: independent review of a MEDIUM change; never edits |
+| `agents/hard-reviewer.md` | `~/.claude/agents/` | Fable 5.2: the same review for HARD changes, by a different model from the one that wrote them |
+| `agents/transcriber.md` | `~/.claude/agents/` | Haiku 5.5: mechanical copying and conversion only |
+| `global/CLAUDE.md` | `~/.claude/CLAUDE.md`, between markers | Model economy, task rating (EASY / MEDIUM / HARD), the review loop, working practice, switching models, honesty |
+| `global/settings-defaults.json` | `~/.claude/settings.json`, with `--settings` | The `enabledPlugins` and `skillOverrides` every machine shares |
+| `skills/starter-kit/` | `~/.claude/skills/` | `/starter-kit`, run once per repo: `CLAUDE.md` from the template, git identity, only the plugins, MCP servers and skills the repo needs. Invoked by hand only |
+| `skills/handoff/` | `~/.claude/skills/` | `/handoff`: `save` writes where the work stands to `HANDOFF.md` before `/clear`; `resume` reads it in the new session |
+| `skills/sdlc/` | `~/.claude/skills/` | The artifact chain intent, plan, build, verify, ship; a plan's `## Tasks` section feeds the builder's contract |
+| `scripts/dispatch.py` | run from the repo | Writes a builder's worktree and task contract (`new`, `contract`, `show`, `done`) |
+| `scripts/sdlc-check.py` | run from the repo | `clarify` fails while an intent has an open point; `converge` lists changed files outside the plan's tasks, tasks left untouched and Proof items without a result |
+| `scripts/contract.py` | used by the two above | Reads a tree's contract and matches paths against it |
+| `scripts/switch-model.py` | run from the repo | Moves one role to another model in one edit |
+| `scripts/check.py`, `scripts/install.py` | run from the repo | The checks and the installer |
 
-## Install
+## Models
+
+Every model is pinned to a full model ID, never an alias, so an upgrade is always a decision (`global/CLAUDE.md`, "Switching models"). The main session's model and effort live in `~/.claude/settings.json` (`"model": "claude-opus-5-5"`, and `high` effort under `modelSettings`). The installer only reports them; the owner sets them.
+
+## Use
 
 ```sh
-git clone https://github.com/0xdonniechu/roles-assign.git ~/work/0xdonniechu/roles-assign
-ln -sfn ~/work/0xdonniechu/roles-assign/skills/starter-kit ~/.claude/skills/starter-kit
+python3 scripts/check.py                 # exit 0 = PASS
+python3 scripts/install.py               # copy agents and skills into ~/.claude (a differing file is backed up first)
+python3 scripts/install.py --global      # also put global/CLAUDE.md into ~/.claude/CLAUDE.md, between markers
+python3 scripts/install.py --settings    # also merge global/settings-defaults.json into settings.json
+python3 scripts/install.py --check       # change nothing; exit 1 if the installed copy differs
 ```
 
-Open a new Claude Code session, then run `/starter-kit` inside a repo.
+The builder's task contract is advisory: nothing blocks a write, so the main session checks the diff against it with `sdlc-check.py converge` and reruns the contract's checks before review.

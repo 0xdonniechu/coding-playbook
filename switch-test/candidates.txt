@@ -1,0 +1,3 @@
+# Model IDs a switch may name besides the ones the agents pin: one per line, "<id> <note>".
+# scripts/switch-model.py refuses an ID that is neither pinned nor listed here (no guessed IDs).
+claude-fable-5-2 listed by the owner 2026-11-10
