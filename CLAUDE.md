@@ -25,7 +25,7 @@ The four subagents (builder, reviewer, hard-reviewer, transcriber), the global i
 ## Rules
 - Models are pinned to full model IDs (`claude-opus-5-5`), never aliases. A model change edits every agent file, the "Current choice" line and the README in one PR (`scripts/switch-model.py` does it in one command).
 - The body of `hard-reviewer.md` is the body of `reviewer.md`: edit `reviewer.md`, then copy its body; `check.py` fails otherwise.
-- Universal only: no project's paths, commands or names in `rores/agents/`, `rores/global/` or `skills/`.
+- Universal only: no project's paths, commands or names in `rores/agents/`, `rores/global/` or `skills/`. One exception: `rores/global/CLAUDE.md`'s Tools section names the owner's local tools (`ambysto-saveit`, `ambysto-graph`, Plane, `ambysto-1prompt`'s design) because every session needs to know them (owner decision 2026-11-10); it tells a session to skip a tool that is not installed.
 - Nothing secret: no keys, tokens, hosts or ids.
 - The builder's task contract is enforced by `hooks/agent-guard.py`. The main session still reruns the contract's checks and runs `sdlc-check.py converge` before review.
 - `hooks/agent-guard.py` and `hooks/autonomous-settings.json` are copied from `ambysto/1prompt` at the commit `hooks/pin.json` names: change them there, copy them here, update the pin.
