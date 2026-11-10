@@ -92,9 +92,13 @@ Or compact: /compact Keep the goal, files changed, decisions, dead ends, open pr
 ## resume
 
 ### 1. Read and compare
-- Do: read `HANDOFF.md`. Compare the branch and `git status --short` with the file. A mismatch
-  (other branch, files since committed, unknown files): say exactly what differs; do not edit
-  anything to make it match.
+- Do: read `HANDOFF.md`. A `## Live tail (auto-captured)` section, when present, is a snapshot a PreCompact
+  hook took from the transcript at its `Captured` time: the last commands (`[ok]` ran clean, `[error]` or `[exit N]`
+  failed, `[check]` printed a line that looks like an error; the text after `->` is that line), the last note and the git state then. It adds to the
+  hand-written sections and does not replace them; it can be older or newer than they are. Compare the branch,
+  `git status --short` and the shas the file names (`git log --oneline -5`) with git. A mismatch
+  (other branch, a sha git does not have, files since committed, unknown files): say exactly what differs;
+  git wins; do not edit anything to make it match.
 - Done when: you know whether the file is current or stale.
 
 ### 2. Load selectively
@@ -112,7 +116,8 @@ gitignored and exists only on this machine). Ask first when "Open problems" is n
 
 ## Never
 
-- Write secrets, tokens or `.env` content into `HANDOFF.md`.
+- Write secrets, tokens or `.env` content into `HANDOFF.md`. The live tail copies commands as typed: before
+  sharing the file or quoting it anywhere, check it for keys.
 - Commit `HANDOFF.md`, or delete it while work is unfinished.
 - Paste whole logs, diffs or test output into the file. Only the command and the conclusion.
 - Type `/clear` or `/compact` yourself: they are the owner's commands. Give the line to paste.
@@ -136,6 +141,7 @@ gitignored and exists only on this machine). Ask first when "Open problems" is n
 
 | Date | What happened | What changed |
 |---|---|---|
+| 2026-11-10 | Resume trial in a fresh agent with a live tail: right next step, kept "ask first"; it guessed what the tail is, what `[ok]`/`[check]` mean, which sha wins, and whether sha drift is a mismatch | The tail described as a timed snapshot that adds to the file; shas compared; git wins |
 | 2026-10-17 | Resume trial in a fresh agent: right next step, avoided the dead end, kept the decision. It could not tell which step was approved; U+00A0 looked like a space | "approved / ask first" labels; escapes for invisible characters |
 | 2026-10-17 | Save trial on a scratch Python repo: 8 guesses (rerun verify?, `__pycache__`, time zone, a durable fact the next session needs) | Copy verify without rerunning; leave out build files; "To move out" section; run from the repo root |
 | 2026-10-17 | Created together with `/starter-kit` | v1 |
