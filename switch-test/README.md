@@ -21,10 +21,10 @@ On release day, follow `RELEASE-DAY.md`.
 
 | case | repo, range | rating | original reviewer | known |
 |---|---|---|---|---|
-| `aps32-guard` | claudecode-guide `d5bc1dc..ea89167` | HARD | Fable 5.1, FAIL | 1 MAJOR, 6 MINOR |
-| `aps34-boundary` | claudecode-guide `bcc4708..852a39a` | HARD | Fable 5.1, FAIL | 3 MAJOR, 4 MINOR, 1 NIT |
+| `aps32-guard` | coding-playbook `d5bc1dc..ea89167` | HARD | Fable 5.1, FAIL | 1 MAJOR, 6 MINOR |
+| `aps34-boundary` | coding-playbook `bcc4708..852a39a` | HARD | Fable 5.1, FAIL | 3 MAJOR, 4 MINOR, 1 NIT |
 | `asp18-overview` | ambysto-space `266e95c..8f0356d` | MEDIUM | Opus 5.5, FAIL | 2 MAJOR, 2 MINOR |
-| replay `aps37-token-guard` | claudecode-guide from `d33a160` (original commit `1f8064f`) | HARD | Fable 5.1, FAIL | 2 MAJOR, 5 MINOR |
+| replay `aps37-token-guard` | coding-playbook from `d33a160` (original commit `1f8064f`) | HARD | Fable 5.1, FAIL | 2 MAJOR, 5 MINOR |
 
 Cases 1-3 were first found by Fable 5.1, so its baseline repeats its own review of the same diff in a new run. That
 is a fair floor for "catches at least as many"; Opus 5.5 on the same cases shows what a different model catches.

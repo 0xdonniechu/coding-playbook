@@ -1,7 +1,7 @@
 {
   "id": "aps37-token-guard",
   "kind": "replay",
-  "repo": "ambysto/claudecode-guide",
+  "repo": "ambysto/coding-playbook",
   "base": "d33a160",
   "head": "1f8064f",
   "rating": "HARD",

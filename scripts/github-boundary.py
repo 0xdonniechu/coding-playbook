@@ -55,7 +55,7 @@ def codeowner_paths(config, repo=None):
 
 
 def codeowners(config, repo=None):
-    lines = ["# Paths only the owner changes (APS-37). Managed by claudecode-guide scripts/github-boundary.py.",
+    lines = ["# Paths only the owner changes (APS-37). Managed by coding-playbook scripts/github-boundary.py.",
              "# A pull request that touches one needs the owner's review; the bot account cannot give it."]
     return "\n".join(lines + [f"{path} @{config['owner']}" for path in codeowner_paths(config, repo)]) + "\n"
 

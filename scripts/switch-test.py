@@ -584,7 +584,7 @@ def self_test():
             problems.append(f"parse or void-check wrong on a clean stream: {clean}")
         for name, tool_input in [("known", {"file_path": str(KIT / "cases" / "aps32-guard" / "known.md")}),
                                  ("known-copy", {"command": "cat /tmp/somewhere/known.md"}),
-                                 ("kit", {"pattern": "MAJOR", "path": "../claudecode-guide/switch-test/runs"}),
+                                 ("kit", {"pattern": "MAJOR", "path": "../coding-playbook/switch-test/runs"}),
                                  ("projects", {"command": "grep -r MAJOR ~/.claude/projects/"}),
                                  ("other-run", {"command": "cat ~/.cache/model-switch-runs/2026-01-01-x-high/aps32-guard/stream.jsonl"})]:
             if not void_hits(stream(name + ".jsonl", tool_input)["tool_inputs"], CACHE / "2026-01-01-y-high" / "aps34-boundary"):
@@ -599,7 +599,7 @@ def self_test():
         if void_hits([mine], own, own / "repo"):
             problems.append("void-check flagged the run's own session folder")
         guard_case = next(c for c in cases if c["id"] == "aps32-guard")
-        for probe in ["cat ~/work/ambysto/claudecode-guide/hooks/agent-guard.py", "git -C /x/work/ambysto/claudecode-guide log",
+        for probe in ["cat ~/work/ambysto/coding-playbook/hooks/agent-guard.py", "git -C /x/work/ambysto/coding-playbook log",
                       "sed -n 1,40p ~/.claude/hooks/1prompt/agent-guard.py", f"cat {HOME}/.claude/hooks/1prompt/agent-guard.py"]:
             if not void_hits([json.dumps({"command": probe})], own, own / "repo", guard_case):
                 problems.append(f"void-check missed an answer key: {probe}")
@@ -610,7 +610,7 @@ def self_test():
             problems.append("void-check flagged an install path in content the run writes")
         if not void_hits([json.dumps({"name": "Write", "input": {"content": "see switch-test/cases/x/known.md"}})], own, own / "repo"):
             problems.append("void-check let a write that names the kit's answers through")
-        if void_hits([json.dumps({"command": "ls /x/work/ambysto/claudecode-guide-guard"})], own, own / "repo", guard_case):
+        if void_hits([json.dumps({"command": "ls /x/work/ambysto/coding-playbook-guard"})], own, own / "repo", guard_case):
             problems.append("void-check flagged a different repo whose name only starts like the source")
         theirs = json.dumps({"file_path": str(HOME / session_folder(CACHE / "r0" / "aps32-guard" / "repo")) + "/s0/x.jsonl"})
         if not void_hits([theirs], own, own / "repo"):
@@ -618,8 +618,8 @@ def self_test():
         replay_case = next(c for c in cases if c["id"] == "aps37-token-guard")
         def tool(name, **args):
             return json.dumps({"name": name, "input": args})
-        for case, probe in [(guard_case, tool("Bash", command="cd ~/work/ambysto/claudecode-guide\ncat hooks/agent-guard.py")),
-                            (guard_case, tool("Bash", command="cd ~/work/ambysto/claudecode-guide&&cat x|head")),
+        for case, probe in [(guard_case, tool("Bash", command="cd ~/work/ambysto/coding-playbook\ncat hooks/agent-guard.py")),
+                            (guard_case, tool("Bash", command="cd ~/work/ambysto/coding-playbook&&cat x|head")),
                             (replay_case, tool("Bash", command="cd ~/.claude/hooks/owner-token-guard && cat *.py")),
                             (replay_case, tool("Bash", command="ls -la ~/.claude/hooks/owner-token-guard")),
                             (replay_case, tool("Grep", pattern="asks gh", path=f"{HOME}/.claude/hooks")),
