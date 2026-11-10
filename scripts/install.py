@@ -6,7 +6,7 @@
   python scripts/install.py --global   also put rores/global/CLAUDE.md into ~/.claude/CLAUDE.md, between markers
   python scripts/install.py --settings also merge rores/global/settings-defaults.json (enabledPlugins, skillOverrides)
                                        into ~/.claude/settings.json and register the session hooks (owner-token guard,
-                                       save-it SessionStart and PreCompact), backing it up first
+                                       save-it SessionStart and PreCompact, the loop's Stop), backing it up first
   python scripts/install.py --check    change nothing; exit 1 if the installed copy differs from this repo
   python scripts/install.py --help     print this and change nothing; any other argument: exit 2, nothing written
 
@@ -81,6 +81,8 @@ def install_file(src, dst):
 GUARD_COMMAND = 'python3 "$HOME/.claude/hooks/owner-token-guard/owner-token-guard.py"'
 # `|| true`: a missing file or python3 must not exit 2, which refuses a compaction; the guard has no such tail on purpose.
 SAVEIT_COMMAND = 'python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" {mode} || true'
+# `|| true` here too: exit 2 from a Stop hook would keep the session going.
+LOOP_COMMAND = 'python3 "$HOME/.claude/hooks/loop/loop-stop.py" || true'
 SESSION_HOOKS = [
     ("owner-token guard hook", "PreToolUse",
      {"matcher": "Bash|Read|Grep|Glob", "hooks": [{"type": "command", "command": GUARD_COMMAND}]}),
@@ -88,6 +90,9 @@ SESSION_HOOKS = [
      {"hooks": [{"type": "command", "command": SAVEIT_COMMAND.format(mode="session-start"), "timeout": 30}]}),
     ("save-it PreCompact hook", "PreCompact",
      {"hooks": [{"type": "command", "command": SAVEIT_COMMAND.format(mode="pre-compact"), "timeout": 30}]}),
+    # The one-prompt loop (APS-56): holds a session only while it has a running run file (loop/loop.py start).
+    ("one-prompt loop Stop hook", "Stop",
+     {"hooks": [{"type": "command", "command": LOOP_COMMAND, "timeout": 60}]}),
 ]
 # Global instructions, between markers, keeping everything else in the file byte for byte. Read and checked here,
 # before anything is written, so a refusal leaves the machine as it was; written further down.
@@ -162,6 +167,7 @@ for name in sorted(json.loads((ROOT / "hooks" / "pin.json").read_text(encoding="
 # The session hooks' files; their settings.json entries are merged further down with --settings.
 install_file(ROOT / "guard" / "owner-token-guard.py", HOME / "hooks" / "owner-token-guard" / "owner-token-guard.py")
 install_file(ROOT / "saveit" / "saveit-hook.py", HOME / "hooks" / "saveit" / "saveit-hook.py")
+install_file(ROOT / "loop" / "loop-stop.py", HOME / "hooks" / "loop" / "loop-stop.py")
 
 # Agents
 for src in sorted((ROOT / "rores" / "agents").glob("*.md")):
