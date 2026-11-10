@@ -4,7 +4,7 @@
 The four subagents (builder, reviewer, hard-reviewer, transcriber), the global instructions, nine skills (`starter-kit`, `handoff`, `sdlc`, `teardown`, `orca-worktree-setup`, `agent-team`, `create-skill`, `secrets`, `whats-next`), the builder dispatch and sdlc check scripts, a one-command model switch and the switch test kit, the agent-guard hooks and the owner-token guard, the owner time log report, plus a check script and an installer. Standard library Python only. Every session on every machine follows these files, so a wrong rule rates HARD work as EASY or lets an unreviewed change through.
 
 ## Verify
-- `python3 scripts/check.py`: agent frontmatter and pinned models, `hard-reviewer` body equal to `reviewer` body, `global/CLAUDE.md` matches the pins, the starter-kit template's sections, skill frontmatter, `settings-defaults.json`, and the self-tests of `dispatch.py`, `sdlc-check.py` and `switch-model.py`.
+- `python3 scripts/check.py`: agent frontmatter and pinned models, `hard-reviewer` body equal to `reviewer` body, `rores/global/CLAUDE.md` matches the pins, the starter-kit template's sections, skill frontmatter, `settings-defaults.json`, and the self-tests of `dispatch.py`, `sdlc-check.py` and `switch-model.py`.
 - `HOME=$(mktemp -d) python3 scripts/install.py` then `--check` under the same `HOME`: installs and reports no drift, without touching `~/.claude`.
 - A change to an agent's behaviour: start a new session, run the agent once on a known diff, and record what it returned in the PR.
 - A change to a skill's steps: run it once in a fresh agent on a scratch repo, given only the skill, and record where it had to guess.
@@ -14,7 +14,7 @@ The four subagents (builder, reviewer, hard-reviewer, transcriber), the global i
 - Task rating (EASY / MEDIUM / HARD), the review loop, who may commit or merge, the honesty rules.
 - The reviewers' checklist and their PASS/FAIL rule.
 - `scripts/dispatch.py`: the task contract a builder works to, which `hooks/agent-guard.py` enforces, and the task parser in `scripts/sdlc-check.py` that `--task` reads it from.
-- The installer's writes to `~/.claude` (backups, the marker block, which also takes over a block left by an earlier `coding-playbook` or `claudecode-guide` install, skill folders, and with `--settings` the entries of `global/settings-defaults.json`; it never sets the model and never deletes).
+- The installer's writes to `~/.claude` (backups, the marker block, which also takes over a block left by an earlier `coding-playbook` or `claudecode-guide` install, skill folders, and with `--settings` the entries of `rores/global/settings-defaults.json`; it never sets the model and never deletes).
 
 ## MEDIUM: builder builds, reviewer reviews
 - Builder and transcriber wording that changes what they do or when they stop; the template's sections; a skill's steps or stop points; `scripts/check.py`; `scripts/sdlc-check.py`.
@@ -25,7 +25,7 @@ The four subagents (builder, reviewer, hard-reviewer, transcriber), the global i
 ## Rules
 - Models are pinned to full model IDs (`claude-opus-5-5`), never aliases. A model change edits every agent file, the "Current choice" line and the README in one PR (`scripts/switch-model.py` does it in one command).
 - The body of `hard-reviewer.md` is the body of `reviewer.md`: edit `reviewer.md`, then copy its body; `check.py` fails otherwise.
-- Universal only: no project's paths, commands or names in `agents/`, `global/` or `skills/`.
+- Universal only: no project's paths, commands or names in `rores/agents/`, `rores/global/` or `skills/`.
 - Nothing secret: no keys, tokens, hosts or ids.
 - The builder's task contract is enforced by `hooks/agent-guard.py`. The main session still reruns the contract's checks and runs `sdlc-check.py converge` before review.
 - `hooks/agent-guard.py` and `hooks/autonomous-settings.json` are copied from `ambysto/1prompt` at the commit `hooks/pin.json` names: change them there, copy them here, update the pin.

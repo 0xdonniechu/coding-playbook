@@ -8,7 +8,7 @@
   python3 scripts/switch-test.py --self-test
 
 Each case runs headless (`claude -p`) in a fresh clone of the case's repo, detached at the case's head, with no remote,
-under ~/.cache/model-switch-runs/<run>/<case>/. The reviewer is the session itself: the body of agents/reviewer.md is
+under ~/.cache/model-switch-runs/<run>/<case>/. The reviewer is the session itself: the body of rores/agents/reviewer.md is
 appended to the system prompt, its tools and agent-guard hooks are given on the command line, and --model/--effort
 set the model under test. The raw stream stays in the cache; report.md and run.json go to switch-test/runs/<run>/<case>/.
 Matching the report against known.md is the main session's proposal and the owner's verdict (switch-test/README.md).
@@ -77,12 +77,12 @@ def load_cases(kind=None):
 
 
 def reviewer_body():
-    text = (ROOT / "agents" / "reviewer.md").read_text(encoding="utf-8")
+    text = (ROOT / "rores" / "agents" / "reviewer.md").read_text(encoding="utf-8")
     head, _, body = text[4:].partition("\n---\n")
     for entries in REVIEW_HOOKS.values():
         for command in (h["command"] for e in entries for h in e["hooks"]):
             if command not in head:
-                die(f"agents/reviewer.md no longer runs `{command}`; update REVIEW_HOOKS to match its frontmatter")
+                die(f"rores/agents/reviewer.md no longer runs `{command}`; update REVIEW_HOOKS to match its frontmatter")
     tools = re.search(r"^tools:\s*(.+)$", head, re.M)
     return body.strip() + "\n", [t.strip() for t in tools.group(1).split(",")] if tools else []
 

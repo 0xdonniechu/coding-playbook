@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Installs roles-assign on this machine.
 
-  python scripts/install.py            copy agents/ to ~/.claude/agents, the pinned hooks to ~/.claude/hooks/1prompt
+  python scripts/install.py            copy rores/agents/ to ~/.claude/agents, the pinned hooks to ~/.claude/hooks/1prompt
                                        and skills/ to ~/.claude/skills (a differing file is backed up first)
-  python scripts/install.py --global   also put global/CLAUDE.md into ~/.claude/CLAUDE.md, between markers
-  python scripts/install.py --settings also merge global/settings-defaults.json (enabledPlugins, skillOverrides)
+  python scripts/install.py --global   also put rores/global/CLAUDE.md into ~/.claude/CLAUDE.md, between markers
+  python scripts/install.py --settings also merge rores/global/settings-defaults.json (enabledPlugins, skillOverrides)
                                        into ~/.claude/settings.json, backing it up first
   python scripts/install.py --check    change nothing; exit 1 if the installed copy differs from this repo
   python scripts/install.py --help     print this and change nothing; any other argument: exit 2, nothing written
 
-settings.json is written only with --settings, and only the entries listed in global/settings-defaults.json;
+settings.json is written only with --settings, and only the entries listed in rores/global/settings-defaults.json;
 every other key keeps its value. The model and effort there stay the owner's: they are only reported.
 With --settings (also under --check) it refuses, exit 2 and nothing written, when settings.json is not a
 UTF-8 JSON object or its enabledPlugins or skillOverrides is not an object.
@@ -88,7 +88,7 @@ GUARD_ENTRY = {"matcher": "Bash|Read|Grep|Glob", "hooks": [{"type": "command", "
 install_file(ROOT / "guard" / "owner-token-guard.py", GUARD)
 
 # Agents
-for src in sorted((ROOT / "agents").glob("*.md")):
+for src in sorted((ROOT / "rores" / "agents").glob("*.md")):
     install_file(src, HOME / "agents" / src.name)
 
 # Skills: every file of each skills/<name>/
@@ -116,7 +116,7 @@ if current is None:
     print(f"skipped    {claude_md} (not UTF-8; the global block was not checked)")
 else:
     nl = "\r\n" if "\r\n" in current else "\n"
-    guide = (ROOT / "global" / "CLAUDE.md").read_text(encoding="utf-8").rstrip()
+    guide = (ROOT / "rores" / "global" / "CLAUDE.md").read_text(encoding="utf-8").rstrip()
     block = nl.join([BEGIN, *guide.splitlines(), END])
     original = current  # the file as it is on disk; a taken-over legacy block makes `current` differ from it
     b, e = current.count(BEGIN), current.count(END)
@@ -161,7 +161,7 @@ else:
 # model and effort are reported only. Every shape is checked before anything is written, and the file is written
 # at most once, with one backup.
 settings = HOME / "settings.json"
-defaults = json.loads((ROOT / "global" / "settings-defaults.json").read_text(encoding="utf-8"))
+defaults = json.loads((ROOT / "rores" / "global" / "settings-defaults.json").read_text(encoding="utf-8"))
 data, problem, text = {}, None, ""
 if settings.exists():
     try:
@@ -228,7 +228,7 @@ else:
     per_model = model_settings.get(model or "", {}) or {}
     per_model = per_model if isinstance(per_model, dict) else {}
     effort = per_model.get("effortLevel") or data.get("effortLevel") or "(not set)"
-    hint = "" if model and model.startswith("claude-") else "  <- not a pinned model ID (see global/CLAUDE.md)"
+    hint = "" if model and model.startswith("claude-") else "  <- not a pinned model ID (see rores/global/CLAUDE.md)"
     print(f"settings   model={model or '(not set)'} effort={effort}{hint}")
 
 if check_only and differs:
