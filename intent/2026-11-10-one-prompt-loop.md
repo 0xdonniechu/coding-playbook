@@ -1,5 +1,5 @@
 ---
-status: approved (owner answers 2026-11-10, "merge proactively" 2026-11-11) # draft → approved → planned → building → verified → shipped (PR #n)
+status: shipped (ambysto/coding-playbook PR #54, here PR #12; approved: owner answers 2026-11-10, "merge proactively" 2026-11-11; plan intent/2026-11-10-one-prompt-loop.plan.md) # draft → approved → planned → building → verified → shipped (PR #n)
 ---
 # One prompt runs the coding loop to the goal, and stops when something fails twice
 
@@ -51,8 +51,9 @@ of at least three tasks on a pilot repo, started by one prompt, reaches "goal do
 
 ## Constraints
 
-- A hook that blocks stopping can trap a session: every failure inside it (no git, a bad run file, a crash, a timeout)
-  must let the session stop. This is HARD: the main session builds it, hard-reviewer reviews.
+- A hook that blocks stopping can trap a session: every failure inside the hook (no git, a bad run file, a crash)
+  must let the session stop. A judge that crashes, times out or gives no verdict is never read as done: the hook holds
+  the session with the error and the idle breaker ends the run on the third stop with no change (hard-review round 1). This is HARD: the main session builds it, hard-reviewer reviews.
 - Opt-in per run; no run file, no effect. Standard library Python; Linux and Windows (the VM); `|| true` as for the
   save-it hooks.
 - Existing rules stand: the task contract and agent-guard for builders, the reviewers, the human-only list, "merges

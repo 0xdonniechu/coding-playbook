@@ -146,6 +146,20 @@ Health checks, cron jobs and alert emails can flag issues by themselves. Convent
 
 ---
 
+## One-prompt run (the chain without the owner between steps)
+
+When the owner gives a goal and asks for it to be carried to done, the chain runs as one run:
+- Write the intent and the plan as above, with `## Tasks` and `## Proof`. Run `clarify`; gather every point only
+  the owner can settle into one question, asked once at the start. The prompt then counts as the approval of that
+  intent and plan (record it in the status lines).
+- Start the run on the plan with the loop tool the global instructions name. From then on, each time the session
+  would stop, a Stop hook runs `converge` and hands back what is left (a task untouched, a proof item without a
+  result, a FAIL result) as the next work. Do the next item; do not stop to report progress.
+- Record each review verdict with the tool's `pass` or `fail`. The second FAIL of one task ends the run: stop and
+  report with the numbered issues. A question only the owner can answer ends it too (the tool's `ask`).
+- Fill `## Result` as proof runs: PASS with numbers, FAIL, or `not run: <reason>`. When `converge` finds nothing
+  left, the run closes as done; end with the usual summary.
+
 ## Evals: regression for the process
 
 An `evals/` folder per repo: one file per case, with a **Task** (a real prompt) and an **Expect** (a result that can be checked). Every production incident and every "the agent got it wrong" adds a permanent case.
