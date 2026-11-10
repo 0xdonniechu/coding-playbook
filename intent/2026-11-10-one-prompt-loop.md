@@ -1,5 +1,5 @@
 ---
-status: shipped (PR #54; approved: owner answers 2026-11-10, "merge proactively" 2026-11-11; plan intent/2026-11-10-one-prompt-loop.plan.md) # draft → approved → planned → building → verified → shipped (PR #n)
+status: shipped (ambysto/coding-playbook PR #54, here PR #12; approved: owner answers 2026-11-10, "merge proactively" 2026-11-11; plan intent/2026-11-10-one-prompt-loop.plan.md) # draft → approved → planned → building → verified → shipped (PR #n)
 ---
 # One prompt runs the coding loop to the goal, and stops when something fails twice
 
