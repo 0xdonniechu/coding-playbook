@@ -15,7 +15,8 @@ PINNED = re.compile(r"^claude-[a-z]+-\d+-\d+(-\d{8})?$")  # optional date suffix
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 TOOLS = {"Read", "Write", "Edit", "Glob", "Grep", "Bash", "PowerShell", "WebFetch", "WebSearch", "NotebookEdit"}
 AGENTS = {"builder", "reviewer", "hard-reviewer", "transcriber"}
-SKILLS = {"starter-kit", "handoff", "sdlc"}
+SKILLS = {"starter-kit", "handoff", "sdlc", "market-research", "teardown", "orca-worktree-setup"}
+HAND_INVOKED = {"orca-worktree-setup"}  # own skills that settings-defaults.json may set to user-invocable-only
 TEMPLATE_SECTIONS = ["## What it does", "## Verify", "## HARD", "## MEDIUM", "## EASY", "## Rules", "## Read when", "## Session state"]
 DEFAULT_KEYS = {"enabledPlugins", "skillOverrides"}
 OVERRIDES = {"on", "name-only", "user-invocable-only", "off"}
@@ -158,8 +159,8 @@ else:
     for name, value in (defaults.get("skillOverrides") or {}).items():
         if value not in OVERRIDES:
             fail(f"global/settings-defaults.json: skillOverrides.{name} '{value}' is not one of {sorted(OVERRIDES)}")
-    if set(defaults.get("skillOverrides") or {}) & SKILLS:
-        fail("global/settings-defaults.json: must not override this repo's own skills")
+    if set(defaults.get("skillOverrides") or {}) & (SKILLS - HAND_INVOKED):
+        fail("global/settings-defaults.json: must not override this repo's own skills (only " + ", ".join(sorted(HAND_INVOKED)) + " may be set there)")
 
 skills = sorted(p.name for p in (ROOT / "skills").iterdir() if p.is_dir()) if (ROOT / "skills").is_dir() else []
 if set(skills) != SKILLS:

@@ -14,6 +14,9 @@ Which model does which job in a Claude Code setup, how work is handed from one r
 | `global/settings-defaults.json` | `~/.claude/settings.json`, with `--settings` | The `enabledPlugins` and `skillOverrides` every machine shares |
 | `skills/starter-kit/` | `~/.claude/skills/` | `/starter-kit`, run once per repo: `CLAUDE.md` from the template, git identity, only the plugins, MCP servers and skills the repo needs. Invoked by hand only |
 | `skills/handoff/` | `~/.claude/skills/` | `/handoff`: `save` writes where the work stands to `HANDOFF.md` before `/clear`; `resume` reads it in the new session |
+| `skills/market-research/` | `~/.claude/skills/` | Decision-oriented, source-traceable research on markets, competitors, pricing and vendors, with a positioning chart script |
+| `skills/teardown/` | `~/.claude/skills/` | Decompose an existing product, write a clean-room spec, then build from the spec only |
+| `skills/orca-worktree-setup/` | `~/.claude/skills/` | Setup scripts so every new Orca worktree gets the gitignored local files it needs |
 | `skills/sdlc/` | `~/.claude/skills/` | The artifact chain intent, plan, build, verify, ship; a plan's `## Tasks` section feeds the builder's contract |
 | `scripts/dispatch.py` | run from the repo | Writes a builder's worktree and task contract (`new`, `contract`, `show`, `done`) |
 | `scripts/sdlc-check.py` | run from the repo | `clarify` fails while an intent has an open point; `converge` lists changed files outside the plan's tasks, tasks left untouched and Proof items without a result |
@@ -36,3 +39,7 @@ python3 scripts/install.py --check       # change nothing; exit 1 if the install
 ```
 
 The builder's task contract is advisory: nothing blocks a write, so the main session checks the diff against it with `sdlc-check.py converge` and reruns the contract's checks before review.
+
+## Sources
+
+`market-research` and `teardown` started from skills by Son Piaz (MIT, (c) 2026 Son Piaz; licence in `skills/LICENSE-adapted-skills`), then changed from real use.
