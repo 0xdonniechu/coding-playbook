@@ -1,0 +1,17 @@
+{
+  "id": "aps37-token-guard",
+  "kind": "replay",
+  "repo": "ambysto/claudecode-guide",
+  "base": "d33a160",
+  "head": "1f8064f",
+  "rating": "HARD",
+  "original_model": "claude-fable-5-1",
+  "replay_reviewer": "claude-fable-5-1",
+  "source": "~/.claude/projects/-home-dc-group-work-ambysto/ecb8bd61-c3b1-4f35-bd20-5626e846cc7c/subagents/agent-a1d20fac41b6dc12c.jsonl",
+  "source_line": 175,
+  "review_task": "Review a HARD (security) change in {repo}: diff `git diff {range}`. Do not check out branches. A later version of this guard is installed on this machine under ~/.claude/hooks/owner-token-guard/ and in other checkouts; do not read them, judge this change on its own (a run that reads them is void). The task the author was given follows; review against it.\n\n{task}\n\nCheck by experiment: bypasses of the deny list (quoting, aliases, eval, base64, sh -c, xargs, variables, API endpoints that return a token, a credential helper asked directly), false positives on ordinary work (commit messages, docs mentioning auth tokens, grep token), the ask rule, the hook's output JSON against Claude Code's PreToolUse contract, malformed input, the installer on a temp HOME only (idempotence, existing hooks untouched and order kept, odd shapes, backups). NEVER run the installer against the real home, never print a token. Never edit. PASS or FAIL with numbered issues (BLOCKER/MAJOR/MINOR), at most 500 words.",
+  "void_extra": [
+    "~/.claude/hooks/owner-token-guard/"
+  ],
+  "prompt_edits": "review_task is written for the kit, not copied: the original round-1 prompt (source line 1) was shaped by the original author's own diff and named checks that point at its findings (git credential fill, gh aliases, GH_HOST). The kit's prompt names general checks only and is the same for every replay, so replays compare with each other; the original's first-round numbers in known.md are context, not a like-for-like baseline."
+}

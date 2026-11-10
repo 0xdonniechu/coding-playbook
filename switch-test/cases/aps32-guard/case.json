@@ -1,0 +1,15 @@
+{
+  "kind": "review",
+  "repo": "ambysto/claudecode-guide",
+  "base": "d5bc1dc",
+  "head": "ea89167",
+  "rating": "HARD",
+  "original_model": "claude-fable-5-1",
+  "source": "~/.claude/projects/-home-dc-group-work-ambysto/d0b7e864-6014-493d-bb07-8e86bb56207f/subagents/agent-ae1199c200de32df6.jsonl",
+  "source_line": 117,
+  "id": "aps32-guard",
+  "void_extra": [
+    "~/.claude/hooks/1prompt/agent-guard.py",
+    "ambysto-1prompt"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "kind": "review",
+  "repo": "ambysto/ambysto-space",
+  "base": "266e95c",
+  "head": "8f0356d",
+  "rating": "MEDIUM",
+  "original_model": "claude-opus-5-5",
+  "source": "~/.claude/projects/-home-dc-group-work-ambysto-ambysto-space/453d966b-3514-4e58-89e7-e454acc9a46f/subagents/agent-a355e14d8de264202.jsonl",
+  "source_line": 130,
+  "id": "asp18-overview"
+}

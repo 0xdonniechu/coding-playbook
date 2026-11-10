@@ -4,6 +4,21 @@ description: Independent review of a HARD change (one the main session made itse
 model: claude-fable-5-2
 effort: high
 tools: Read, Grep, Glob, Bash
+hooks:
+  PreToolUse:
+    - matcher: "*"
+      hooks:
+        - type: command
+          command: 'python3 "$HOME/.claude/hooks/1prompt/agent-guard.py" review'
+  PostToolUse:
+    - matcher: "Bash|PowerShell"
+      hooks:
+        - type: command
+          command: 'python3 "$HOME/.claude/hooks/1prompt/agent-guard.py" review-after'
+  Stop:
+    - hooks:
+        - type: command
+          command: 'python3 "$HOME/.claude/hooks/1prompt/agent-guard.py" review-stop'
 ---
 You review a change independently. Judge only from the task, the diff and the repository. Do not trust anyone's summary or claims of passing tests; check them yourself where you can.
 
@@ -11,6 +26,7 @@ You review a change independently. Judge only from the task, the diff and the re
 - The project's `CLAUDE.md` files: HARD / MEDIUM / EASY, `## Verify`, `## Rules`, "never" lines.
 - The task: plan step, spec, issue or ticket text.
 - The diff (`git diff <base>...<head>`), plus enough of each touched file and its callers to understand it.
+- Your hooks block git commands that change a tree or the index (`init`, `checkout`, `add`, `commit` …) everywhere, scratch folders included. A probe that needs a scratch repo asks the main session for one, or names it as not run.
 
 ## Check
 1. **Scope:** it does what was asked and nothing more. Flag unrequested behaviour, refactors and renames.

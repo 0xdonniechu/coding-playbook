@@ -1,0 +1,16 @@
+{
+  "kind": "review",
+  "repo": "ambysto/claudecode-guide",
+  "base": "bcc4708",
+  "head": "852a39a",
+  "rating": "HARD",
+  "original_model": "claude-fable-5-1",
+  "source": "~/.claude/projects/-home-dc-group-work-ambysto-ambysto-space/69e03d46-061c-4c31-941c-cd57f6f4f100/subagents/agent-aa5cfb9754eddb1fc.jsonl",
+  "source_line": 185,
+  "id": "aps34-boundary",
+  "void_extra": [
+    "~/.claude/hooks/1prompt/agent-guard.py",
+    "ambysto-1prompt"
+  ],
+  "prompt_edits": "Besides {repo} and {range}: the sentence on the beads binary at a /tmp path (gone) now says to use one only if it is on PATH, with the same DO_NOT_TRACK and HOME rule; the sentence pointing to the beads trial notes on branch aps-31-beads-trial is dropped (the clone holds no other branch)."
+}

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Installs roles-assign on this machine.
 
-  python scripts/install.py            copy agents/ to ~/.claude/agents and skills/ to ~/.claude/skills
-                                       (a differing file is backed up first)
+  python scripts/install.py            copy agents/ to ~/.claude/agents, the pinned hooks to ~/.claude/hooks/1prompt
+                                       and skills/ to ~/.claude/skills (a differing file is backed up first)
   python scripts/install.py --global   also put global/CLAUDE.md into ~/.claude/CLAUDE.md, between markers
   python scripts/install.py --settings also merge global/settings-defaults.json (enabledPlugins, skillOverrides)
                                        into ~/.claude/settings.json, backing it up first
   python scripts/install.py --check    change nothing; exit 1 if the installed copy differs from this repo
+  python scripts/install.py --help     print this and change nothing; any other argument: exit 2, nothing written
 
 settings.json is written only with --settings, and only the entries listed in global/settings-defaults.json;
 every other key keeps its value. The model and effort there stay the owner's: they are only reported.
@@ -29,6 +30,13 @@ BEGIN, END = "<!-- roles-assign:begin -->", "<!-- roles-assign:end -->"
 check_only = "--check" in sys.argv
 with_global = "--global" in sys.argv
 with_settings = "--settings" in sys.argv
+if any(a in ("-h", "--help") for a in sys.argv[1:]):
+    print(__doc__.strip())
+    sys.exit(0)
+unknown = [a for a in sys.argv[1:] if a not in ("--check", "--global", "--settings")]
+if unknown:  # an ignored flag would run the real install (2026-11-08: `--help` did)
+    print(f"install.py: unknown argument {' '.join(map(repr, unknown))}; nothing written\n\n{__doc__.strip()}", file=sys.stderr)
+    sys.exit(2)
 differs = []
 
 
@@ -61,6 +69,20 @@ def install_file(src, dst):
     shutil.copyfile(src, dst)
     print(f"installed  {dst}{note}")
 
+
+# Hooks the agents' frontmatter runs (agent-guard.py; without them a guarded agent's Bash calls are all blocked),
+# and autonomous-settings.json, which an autonomous run passes with `claude --settings` (the boundary hook).
+# Their source is ambysto/1prompt; hooks/pin.json names the commit and the files copied from it (check.py compares
+# their hashes). They go where that repo's hooks and the agents' frontmatter expect them, before the agents, so a
+# failure here never leaves agents pointing at a hook that is not there.
+for name in sorted(json.loads((ROOT / "hooks" / "pin.json").read_text(encoding="utf-8"))["files"]):
+    install_file(ROOT / "hooks" / name, HOME / "hooks" / "1prompt" / name)
+
+# The owner-token guard (APS-37): a PreToolUse hook for every session, registered in settings.json with --settings.
+GUARD = HOME / "hooks" / "owner-token-guard" / "owner-token-guard.py"
+GUARD_COMMAND = 'python3 "$HOME/.claude/hooks/owner-token-guard/owner-token-guard.py"'
+GUARD_ENTRY = {"matcher": "Bash|Read|Grep|Glob", "hooks": [{"type": "command", "command": GUARD_COMMAND}]}
+install_file(ROOT / "guard" / "owner-token-guard.py", GUARD)
 
 # Agents
 for src in sorted((ROOT / "agents").glob("*.md")):
@@ -125,7 +147,9 @@ else:
         claude_md.write_bytes(updated.encode("utf-8"))
         print(f"installed  {claude_md} (global block){note}")
 
-# Settings: the plugin and skill defaults are merged with --settings; model and effort are reported only
+# Settings: the plugin and skill defaults and the guard's PreToolUse entry are merged with --settings;
+# model and effort are reported only. Every shape is checked before anything is written, and the file is written
+# at most once, with one backup.
 settings = HOME / "settings.json"
 defaults = json.loads((ROOT / "global" / "settings-defaults.json").read_text(encoding="utf-8"))
 data, problem, text = {}, None, ""
@@ -139,11 +163,18 @@ if settings.exists():
         problem = "it is not a JSON object"
     if problem is None and any(not isinstance(data.get(key, {}), dict) for key in defaults):
         problem = f"one of {sorted(defaults)} is not an object"
+    if problem is None and ("hooks" in data and not isinstance(data["hooks"], dict)
+                            or isinstance(data.get("hooks"), dict) and "PreToolUse" in data["hooks"]
+                            and not isinstance(data["hooks"]["PreToolUse"], list)):
+        problem = "hooks or hooks.PreToolUse is not the expected shape"
 if problem:
     if with_settings:
         refuse(f"{settings}: {problem}; fix it first")
-    print(f"settings   could not read {settings}: {problem} (defaults not checked)")
+    if check_only:
+        differs.append(f"{settings} (not checked)")
+    print(f"settings   could not read {settings}: {problem} (defaults and the guard hook not checked)")
 else:
+    changes = []
     drift = [f"{key}.{name}" for key, entries in defaults.items() for name, value in entries.items()
              if data.get(key, {}).get(name) != value]
     present = any(name in data.get(key, {}) for key, entries in defaults.items() for name in entries)
@@ -159,12 +190,29 @@ else:
     else:
         for key, entries in defaults.items():
             data.setdefault(key, {}).update(entries)
+        changes.append(f"defaults: {len(drift)} entries")
+    # The guard's PreToolUse entry: added once, after any other hooks (they are never changed or reordered).
+    pre = data.get("hooks", {}).get("PreToolUse", [])
+    registered = any(isinstance(e, dict) and isinstance(e.get("hooks"), list)
+                     and any(isinstance(h, dict) and h.get("command") == GUARD_COMMAND for h in e["hooks"])
+                     for e in pre)
+    if registered:
+        print(f"unchanged  {settings} (owner-token guard hook)")
+    elif check_only:
+        differs.append(f"{settings} (owner-token guard hook)")
+        print(f"differs    {settings} (owner-token guard hook not registered; run with --settings)")
+    elif not with_settings:
+        print(f"skipped    {settings} (owner-token guard hook not registered; run with --settings)")
+    else:
+        data.setdefault("hooks", {}).setdefault("PreToolUse", []).append(GUARD_ENTRY)
+        changes.append("owner-token guard hook")
+    if changes:
         nl = "\r\n" if "\r\n" in text else "\n"
         body = json.dumps(data, indent=2, ensure_ascii=False).replace("\n", nl) + nl
         HOME.mkdir(parents=True, exist_ok=True)
         note = f" (backup: {backup(settings).name})" if settings.exists() else ""
         settings.write_bytes(((BOM if text.startswith(BOM) else "") + body).encode("utf-8"))
-        print(f"installed  {settings} (defaults: {len(drift)} entries){note}")
+        print(f"installed  {settings} ({'; '.join(changes)}){note}")
     model = data.get("model") if isinstance(data.get("model"), str) else None
     model_settings = data.get("modelSettings") if isinstance(data.get("modelSettings"), dict) else {}
     per_model = model_settings.get(model or "", {}) or {}

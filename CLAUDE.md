@@ -1,7 +1,7 @@
 # roles-assign: which model does which job in Claude Code, and the skills and scripts that go with it
 
 ## What it does
-The four subagents (builder, reviewer, hard-reviewer, transcriber), the global instructions, six skills (`starter-kit`, `handoff`, `sdlc`, `market-research`, `teardown`, `orca-worktree-setup`), the builder dispatch and sdlc check scripts, a one-command model switch, plus a check script and an installer. Standard library Python only. Every session on every machine follows these files, so a wrong rule rates HARD work as EASY or lets an unreviewed change through.
+The four subagents (builder, reviewer, hard-reviewer, transcriber), the global instructions, six skills (`starter-kit`, `handoff`, `sdlc`, `market-research`, `teardown`, `orca-worktree-setup`), the builder dispatch and sdlc check scripts, a one-command model switch and the switch test kit, the agent-guard hooks and the owner-token guard, the owner time log report, plus a check script and an installer. Standard library Python only. Every session on every machine follows these files, so a wrong rule rates HARD work as EASY or lets an unreviewed change through.
 
 ## Verify
 - `python3 scripts/check.py`: agent frontmatter and pinned models, `hard-reviewer` body equal to `reviewer` body, `global/CLAUDE.md` matches the pins, the starter-kit template's sections, skill frontmatter, `settings-defaults.json`, and the self-tests of `dispatch.py`, `sdlc-check.py` and `switch-model.py`.
@@ -27,7 +27,8 @@ The four subagents (builder, reviewer, hard-reviewer, transcriber), the global i
 - The body of `hard-reviewer.md` is the body of `reviewer.md`: edit `reviewer.md`, then copy its body; `check.py` fails otherwise.
 - Universal only: no project's paths, commands or names in `agents/`, `global/` or `skills/`.
 - Nothing secret: no keys, tokens, hosts or ids.
-- The builder's task contract is advisory (nothing blocks a write): the main session checks the diff with `sdlc-check.py converge` and reruns the contract's checks.
+- The builder's task contract is enforced by `hooks/agent-guard.py`; `scripts/contract.py` reads the same file for `sdlc-check.py`. The main session still reruns the contract's checks and runs `sdlc-check.py converge` before review.
+- `hooks/agent-guard.py` and `hooks/autonomous-settings.json` are copied from `ambysto/1prompt` at the commit `hooks/pin.json` names: change them there, copy them here, update the pin.
 - Git: English only; the `0xdonniechu` account (check with `gh api user --jq .login` before the first PR of a session; do not switch accounts); branches `feat/...` or `fix/...`, never a push to `main`; only the main session commits, pushes and opens PRs, and it merges only when the owner asks.
 
 ## Read when
@@ -38,4 +39,5 @@ The four subagents (builder, reviewer, hard-reviewer, transcriber), the global i
 `HANDOFF.md` (gitignored) holds only where the current goal stands. Plans, decisions and dead ends go in files, not in the chat.
 
 ## Open
-- Not ported: agent-guard hooks that would block a builder's write outside its contract, and the model switch test kit (recorded review cases and its runner). `switch-test/candidates.txt` lists the model IDs a switch may name.
+- The switch-test cases and replays are diffs from `ambysto/claudecode-guide`; their runner needs a clone of it at `~/work/ambysto/claudecode-guide`. Keep that clone, or the kit cannot replay them.
+- `intent/` and `docs/` are the history of these files as they were made in `claudecode-guide`.
