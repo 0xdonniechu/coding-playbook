@@ -1,0 +1,8 @@
+{
+  "repo": "ambysto/1prompt",
+  "commit": "00c24b72fd922bd35262b3c4dcf60cc28b7177b0",
+  "files": {
+    "agent-guard.py": "74003ae6196167e22864825edc80adb8fd53429c79718bd0162bb7c6cb651b5b",
+    "autonomous-settings.json": "1934588532b9c37cabc1b5b83b2e60c319e732a6ccdead48cb0988249f625ba6"
+  }
+}

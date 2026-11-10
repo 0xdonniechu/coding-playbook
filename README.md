@@ -21,6 +21,12 @@ Which model does which job in a Claude Code setup, how work is handed from one r
 | `scripts/dispatch.py` | run from the repo | Writes a builder's worktree and task contract (`new`, `contract`, `show`, `done`) |
 | `scripts/sdlc-check.py` | run from the repo | `clarify` fails while an intent has an open point; `converge` lists changed files outside the plan's tasks, tasks left untouched and Proof items without a result |
 | `scripts/contract.py` | used by the two above | Reads a tree's contract and matches paths against it |
+| `hooks/agent-guard.py`, `hooks/autonomous-settings.json`, `hooks/pin.json` | `~/.claude/hooks/1prompt/` | The hooks the builder and the reviewers run: a builder edits only inside its contract, the reviewers cannot change a tree. Copied from `ambysto/1prompt` at the commit `pin.json` names; never edited here |
+| `guard/owner-token-guard.py` | `~/.claude/hooks/owner-token-guard/` | A PreToolUse hook for every session: denies a command that would take the owner's GitHub token or switch an account |
+| `scripts/switch-test.py`, `switch-test/` | run from the repo | The model switch kit: recorded review cases, the blind runner, the runs and results, and the release-day checklist |
+| `scripts/hil-report.py` | run from the repo | Reports the owner time log (`~/.claude/hil/log.jsonl`) |
+| `scripts/github-boundary.py`, `.json` | run from the repo | The server-side boundary for paths only the owner changes |
+| `intent/`, `docs/` | read | The intents and plans behind these files, review records and brand assets |
 | `scripts/switch-model.py` | run from the repo | Moves one role to another model in one edit |
 | `scripts/check.py`, `scripts/install.py` | run from the repo | The checks and the installer |
 
@@ -38,7 +44,7 @@ python3 scripts/install.py --settings    # also merge global/settings-defaults.j
 python3 scripts/install.py --check       # change nothing; exit 1 if the installed copy differs
 ```
 
-The builder's task contract is advisory: nothing blocks a write, so the main session checks the diff against it with `sdlc-check.py converge` and reruns the contract's checks before review.
+The builder's task contract is enforced by `agent-guard`: an edit outside it is refused and a change outside it by any means locks the run. The main session also checks the diff with `sdlc-check.py converge` and reruns the contract's checks before review.
 
 ## Sources
 

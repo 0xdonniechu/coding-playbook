@@ -1,0 +1,52 @@
+{
+  "model": "claude-opus-5-5",
+  "cost_usd": 8.54548665,
+  "usage": {
+    "input_tokens": 70,
+    "cache_creation_input_tokens": 134821,
+    "cache_read_input_tokens": 3372072,
+    "output_tokens": 67661,
+    "output_tokens_details": {
+      "thinking_tokens": 24695
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 134821,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 627,
+        "cache_read_input_tokens": 145598,
+        "cache_creation_input_tokens": 2167,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 2167
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "duration_ms": 1512310,
+  "is_error": false,
+  "effort": "high",
+  "case": "aps37-token-guard",
+  "role": "author",
+  "head": "afb1879",
+  "committed": true,
+  "void": [],
+  "watch_changed": [
+    "/home/dc-group/.claude/hil/log.jsonl",
+    "/home/dc-group/work/ambysto/claudecode-guide"
+  ],
+  "void_note": "rechecked clean with the read-only answer-key rule",
+  "watch_changed_note": "the owner log lines came from another owner session (what-to-build); claudecode-guide changed by the main session's own commits; the replay touched neither"
+}

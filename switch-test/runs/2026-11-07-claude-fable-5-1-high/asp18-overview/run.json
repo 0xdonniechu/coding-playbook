@@ -1,0 +1,45 @@
+{
+  "model": "claude-fable-5-1",
+  "cost_usd": 3.01874575,
+  "usage": {
+    "input_tokens": 258,
+    "cache_creation_input_tokens": 109117,
+    "cache_read_input_tokens": 734903,
+    "output_tokens": 13002,
+    "output_tokens_details": {
+      "thinking_tokens": 7964
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 109117,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 32,
+        "output_tokens": 951,
+        "cache_read_input_tokens": 124037,
+        "cache_creation_input_tokens": 1905,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 1905
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "duration_ms": 220806,
+  "is_error": false,
+  "effort": "high",
+  "case": "asp18-overview",
+  "void": [],
+  "verdict": "scored by the owner in results.md",
+  "watch_changed": []
+}

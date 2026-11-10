@@ -1,0 +1,35 @@
+{
+  "owner": "ambysto",
+  "repos": [
+    "ambysto-assets",
+    "ambysto-devbox",
+    "ambysto-gate",
+    "ambysto-kit",
+    "ambysto-memory",
+    "ambysto-optimer",
+    "ambysto-power",
+    "ambysto-search",
+    "ambysto-space",
+    "ambysto-tune",
+    "claudecode-guide",
+    "steady"
+  ],
+  "codeowners": [
+    "/docs/spec/",
+    "/LICENSE*",
+    "/COPYING*",
+    "/.claude/",
+    "/.github/CODEOWNERS"
+  ],
+  "repo_codeowners": {
+    "ambysto-memory": [
+      "/lessons/",
+      "/INDEX.md",
+      "/AGENTS.md",
+      "/CLAUDE.md",
+      "/scripts/",
+      "/hooks/",
+      "/intent/"
+    ]
+  }
+}

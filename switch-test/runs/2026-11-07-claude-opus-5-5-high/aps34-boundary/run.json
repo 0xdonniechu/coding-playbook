@@ -1,0 +1,46 @@
+{
+  "model": "claude-opus-5-5",
+  "cost_usd": 1.2792812,
+  "usage": {
+    "input_tokens": 32,
+    "cache_creation_input_tokens": 81943,
+    "cache_read_input_tokens": 1123946,
+    "output_tokens": 19941,
+    "output_tokens_details": {
+      "thinking_tokens": 10694
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 81943,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 3878,
+        "cache_read_input_tokens": 95529,
+        "cache_creation_input_tokens": 1404,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 1404
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "duration_ms": 196671,
+  "is_error": false,
+  "effort": "high",
+  "case": "aps34-boundary",
+  "void": [],
+  "verdict": "scored by the owner in results.md",
+  "watch_changed": [],
+  "void_note": "first marked VOID for '.claude/projects': the run read its own large tool output from its own session folder; rechecked clean with the fixed void-check"
+}
