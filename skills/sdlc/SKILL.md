@@ -45,10 +45,10 @@ None.
 Mark every open point where it stands in the text as `[NEEDS CLARIFICATION: <question>]`, and list it under `## Open questions`. That section begins with `None` when nothing is open. Run
 
 ```
-python3 <roles-assign>/scripts/sdlc-check.py clarify intent/<yyyy-mm-dd>-<slug>.md
+python3 <coding-playbook>/scripts/sdlc-check.py clarify intent/<yyyy-mm-dd>-<slug>.md
 ```
 
-(`scripts/sdlc-check.py` in the roles-assign repo) before the intent goes to `approved`, and again before the plan is written. It fails while any marker remains or `## Open questions` does not begin with `None`.
+(`scripts/sdlc-check.py` in the coding-playbook repo) before the intent goes to `approved`, and again before the plan is written. It fails while any marker remains or `## Open questions` does not begin with `None`.
 
 You edit it → `status: approved`, commit. **Do not write the plan before the intent is approved.**
 
@@ -123,7 +123,7 @@ The repo's normal rules apply (one logical unit at a time; a worktree if tasks r
 Run exactly the **Proof** items in the plan, and fill `## Result`: one numbered item per Proof item, beginning `PASS`, `FAIL` or `not run: <reason>`. Then run
 
 ```
-python3 <roles-assign>/scripts/sdlc-check.py converge intent/<yyyy-mm-dd>-<slug>.plan.md
+python3 <coding-playbook>/scripts/sdlc-check.py converge intent/<yyyy-mm-dd>-<slug>.plan.md
 ```
 
 It lists each gap between the plan and the branch's diff: a changed path no task allows, a task never touched (and not marked `not needed`), a Proof item with no Result. It fails while any gap remains. A plan without `## Tasks` is reported and passes, so older plans stay valid.

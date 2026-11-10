@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Installs roles-assign on this machine.
+"""Installs coding-playbook on this machine.
 
   python scripts/install.py            copy rores/agents/ to ~/.claude/agents, the pinned hooks to ~/.claude/hooks/1prompt
                                        and skills/ to ~/.claude/skills (a differing file is backed up first)
@@ -26,9 +26,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home() / ".claude"
 BOM = chr(0xFEFF)  # written as a code point so editors cannot strip it
-BEGIN, END = "<!-- roles-assign:begin -->", "<!-- roles-assign:end -->"
+BEGIN, END = "<!-- coding-playbook:begin -->", "<!-- coding-playbook:end -->"
 # Markers of earlier installs of this block: a block between exactly one such pair is taken over, not duplicated.
-LEGACY = [("<!-- coding-playbook:begin -->", "<!-- coding-playbook:end -->"),
+LEGACY = [("<!-- roles-assign:begin -->", "<!-- roles-assign:end -->"),
           ("<!-- claudecode-guide:begin -->", "<!-- claudecode-guide:end -->")]
 check_only = "--check" in sys.argv
 with_global = "--global" in sys.argv
