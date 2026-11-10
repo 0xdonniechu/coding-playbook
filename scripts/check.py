@@ -126,6 +126,17 @@ except (ValueError, KeyError, TypeError, IndexError, AttributeError) as error:
 guard = subprocess.run([sys.executable, str(ROOT / "guard" / "owner-token-guard.py"), "--self-test"], capture_output=True, text=True)
 if guard.returncode != 0:
     fail("guard/owner-token-guard.py --self-test failed:\n" + guard.stdout.strip())
+saveit = subprocess.run([sys.executable, str(ROOT / "saveit" / "saveit-hook.py"), "--self-test"], capture_output=True, text=True)
+if saveit.returncode != 0:
+    fail("saveit/saveit-hook.py --self-test failed:\n" + (saveit.stdout + saveit.stderr).strip())
+plane = subprocess.run([sys.executable, str(ROOT / "scripts" / "plane.py"), "--self-test"], capture_output=True, text=True)
+if plane.returncode != 0:
+    fail("scripts/plane.py --self-test failed:\n" + (plane.stdout + plane.stderr).strip())
+diagram = subprocess.run([sys.executable, str(ROOT / "scripts" / "progress-diagram.py"), "--self-test"], capture_output=True, text=True)
+if diagram.returncode != 0:
+    fail("scripts/progress-diagram.py --self-test failed:\n" + (diagram.stdout + diagram.stderr).strip())
+elif diagram.stdout.startswith("not run"):
+    print("note: " + diagram.stdout.strip())
 boundary = subprocess.run([sys.executable, str(ROOT / "scripts" / "github-boundary.py"), "--self-test"], capture_output=True, text=True)
 if boundary.returncode != 0:
     fail("scripts/github-boundary.py --self-test failed:\n" + boundary.stdout.strip())
@@ -327,9 +338,48 @@ for legacy in ("roles-assign", "claudecode-guide"):
             fail(f"install.py --global over a '{legacy}' block: expected one coding-playbook block, the old one gone and "
                  f"the owner's text kept; got exit {out.returncode}, {text.count('coding-playbook:begin')} block(s)")
 
+# --settings registers the session hooks once each, after hooks already there (another tool's SessionStart entry
+# stays first and unchanged), and a second run changes nothing. Temporary HOME again.
+with tempfile.TemporaryDirectory() as home:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("XDG_", "CLAUDE"))
+           and k not in ("HOMEDRIVE", "HOMEPATH")} | {"HOME": home, "USERPROFILE": home}
+    claude = Path(home) / ".claude"
+    claude.mkdir()
+    other = {"hooks": [{"type": "command", "command": "other-tool session-start"}]}
+    (claude / "settings.json").write_text(json.dumps({"model": "claude-opus-5-5", "hooks": {"SessionStart": [other]}}), encoding="utf-8")
+    before = subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), "--check"], env=env,
+                            capture_output=True, text=True, timeout=120)
+    if before.returncode != 1 or "save-it PreCompact hook not registered" not in before.stdout:
+        fail(f"install.py --check without the session hooks: expected exit 1 naming them; got exit {before.returncode}")
+    runs = [subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), *args], env=env,
+                           capture_output=True, text=True, timeout=120) for args in (["--settings"], ["--settings"], ["--check"])]
+    hooks = json.loads((claude / "settings.json").read_text(encoding="utf-8")).get("hooks", {})
+    commands = {event: [h.get("command") for e in hooks.get(event, []) for h in e.get("hooks", [])] for event in hooks}
+    want = {"PreToolUse": ['python3 "$HOME/.claude/hooks/owner-token-guard/owner-token-guard.py"'],
+            "SessionStart": ["other-tool session-start", 'python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" session-start || true'],
+            "PreCompact": ['python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" pre-compact || true']}
+    if [r.returncode for r in runs] != [0, 0, 0] or commands != want or "installed  " + str(claude / "settings.json") in runs[1].stdout \
+            or not (claude / "hooks" / "saveit" / "saveit-hook.py").is_file():
+        fail(f"install.py --settings session hooks: expected {want} registered once, the second run unchanged and --check clean; "
+             f"got exits {[r.returncode for r in runs]}, {commands}")
+
+# A refusal writes nothing: with --settings and a hooks event that is not a list, exit 2 before any file is copied
+# (hard-reviewer, 2026-11-10: the agents, skills and hooks used to be written first). Temporary HOME again.
+with tempfile.TemporaryDirectory() as home:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("XDG_", "CLAUDE"))
+           and k not in ("HOMEDRIVE", "HOMEPATH")} | {"HOME": home, "USERPROFILE": home}
+    claude = Path(home) / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text(json.dumps({"hooks": {"PreCompact": {}}}), encoding="utf-8")
+    out = subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), "--settings"], env=env,
+                         capture_output=True, text=True, timeout=120)
+    left = sorted(p.relative_to(claude).as_posix() for p in claude.rglob("*"))
+    if out.returncode != 2 or left != ["settings.json"]:
+        fail(f"install.py --settings over a bad hooks shape: expected exit 2 and nothing written; got exit {out.returncode}, {left[:5]}")
+
 if failures:
     print("FAIL")
     for f in failures:
         print(f"- {f}")
     sys.exit(1)
-print(f"PASS: {len(agents)} agents pinned, reviewer bodies equal, guard hooks set and self-tested, global matches the pinned models, template sections present, {len(skills)} skills valid, settings defaults valid")
+print(f"PASS: {len(agents)} agents pinned, reviewer bodies equal, guard hooks set and self-tested, session hooks registered once, global matches the pinned models, template sections present, {len(skills)} skills valid, settings defaults valid")

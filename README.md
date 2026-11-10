@@ -41,6 +41,9 @@ Run from the repo, or installed as hooks. None of it assigns a role.
 | `scripts/sdlc-check.py` | run from the repo | `clarify` fails while an intent has an open point; `converge` lists changed files outside the plan's tasks, tasks left untouched and Proof items without a result |
 | `hooks/agent-guard.py`, `hooks/autonomous-settings.json`, `hooks/pin.json` | `~/.claude/hooks/1prompt/` | The hooks the builder and the reviewers run: a builder edits only inside its contract, the reviewers cannot change a tree. Copied from `ambysto/1prompt` at the commit `pin.json` names; never edited here |
 | `guard/owner-token-guard.py` | `~/.claude/hooks/owner-token-guard/` | A PreToolUse hook for every session: denies a command that would take the owner's GitHub token or switch an account |
+| `saveit/saveit-hook.py` | `~/.claude/hooks/saveit/`, registered with `--settings` | Save-it hooks for every session: at SessionStart the `ambysto-saveit resume` brief when the repo root has a `HANDOFF.md`; at PreCompact `ambysto-saveit tail --write` into an existing, git-ignored `HANDOFF.md`. Never blocks a session |
+| `scripts/plane.py` | run from the repo | Plane tickets over REST (`projects`, `show`, `create`, `state`, `comment`, `link`); the key is read at run time, sent only over https and never printed |
+| `scripts/progress-diagram.py` | run from the repo | Draws a repo with `ambysto-graph` into its git folder: architecture, what the branch changed and, with `--plan`, the plan's tasks and proof items with their state |
 | `scripts/switch-test.py`, `switch-test/` | run from the repo | The model switch kit: recorded review cases, the blind runner, the runs and results, and the release-day checklist |
 | `scripts/hil-report.py` | run from the repo | Reports the owner time log (`~/.claude/hil/log.jsonl`) |
 | `scripts/github-boundary.py`, `.json` | run from the repo | The server-side boundary for paths only the owner changes |
@@ -58,7 +61,7 @@ Every model is pinned to a full model ID, never an alias, so an upgrade is alway
 python3 scripts/check.py                 # exit 0 = PASS
 python3 scripts/install.py               # copy agents and skills into ~/.claude (a differing file is backed up first)
 python3 scripts/install.py --global      # also put rores/global/CLAUDE.md into ~/.claude/CLAUDE.md, between markers
-python3 scripts/install.py --settings    # also merge rores/global/settings-defaults.json into settings.json
+python3 scripts/install.py --settings    # also merge rores/global/settings-defaults.json and register the session hooks in settings.json
 python3 scripts/install.py --check       # change nothing; exit 1 if the installed copy differs
 ```
 
