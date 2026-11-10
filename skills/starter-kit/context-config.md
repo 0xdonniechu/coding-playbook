@@ -64,7 +64,7 @@ Lean defaults in `~/.claude`; a repo that needs more turns it on in `.claude/set
 ## Global defaults (set once per machine, outside this skill)
 
 The starter kit only makes context smaller once the global defaults are lean:
-- `enabledPlugins` and `skillOverrides`: the guide's `global/settings-defaults.json`, merged by
+- `enabledPlugins` and `skillOverrides`: the guide's `rores/global/settings-defaults.json`, merged by
   `install.py --settings`; `install.py --check` reports drift. Change them there, not by hand.
 - User-scope MCP holds only servers most repos use. The rest are in `~/.claude/mcp-catalog.json`,
   written per machine (see the guide's README, "New machine").

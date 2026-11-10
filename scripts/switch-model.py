@@ -5,7 +5,7 @@
     python3 scripts/switch-model.py --role main --to <id> --effort <level> --note "<numbers>" [--dry-run]
     python3 scripts/switch-model.py --self-test
 
-For an agent role it edits the agent file's `model:`, the role's line in global/CLAUDE.md ("Subagents"), its README
+For an agent role it edits the agent file's `model:`, the role's line in rores/global/CLAUDE.md ("Subagents"), its README
 row, and one dated "Switch (...)" line under "Current choice". For `main` it edits the "Current choice" line and the
 main session's effort entry, then prints the owner's steps: settings.json stays owner-only. It edits this repo's
 working tree only (never ~/.claude), never commits or installs, and writes nothing unless every edit applies and
@@ -91,14 +91,14 @@ def plan_edits(root, moves, note, effort, today):
     if not note.strip():
         raise Refused("--note is empty: give the switch test's numbers from switch-test/results.md")
     if "\n" in note.strip() or "\r" in note:
-        raise Refused("--note has a line break: it is written into one line of global/CLAUDE.md")
-    rels = ["global/CLAUDE.md", "README.md", *(f"agents/{r}.md" for r in ROLES)]
+        raise Refused("--note has a line break: it is written into one line of rores/global/CLAUDE.md")
+    rels = ["rores/global/CLAUDE.md", "README.md", *(f"rores/agents/{r}.md" for r in ROLES)]
     texts = {rel: (root / rel).read_text(encoding="utf-8") for rel in rels}
-    pins = {r: pin(texts[f"agents/{r}.md"]) for r in ROLES}
+    pins = {r: pin(texts[f"rores/agents/{r}.md"]) for r in ROLES}
     known = known_ids(root, pins)
-    current = CURRENT.search(texts["global/CLAUDE.md"])
+    current = CURRENT.search(texts["rores/global/CLAUDE.md"])
     if not current:
-        raise Refused("global/CLAUDE.md: no '**Current choice (<date>): <Model>.**' line")
+        raise Refused("rores/global/CLAUDE.md: no '**Current choice (<date>): <Model>.**' line")
     main_label = current.group(2)
     for role, to in moves:
         if not pinned.match(to):
@@ -107,7 +107,7 @@ def plan_edits(root, moves, note, effort, today):
             raise Refused(f"{to} is not pinned by an agent, listed in switch-test/candidates.txt or recorded by a real "
                           "run in switch-test/runs (no guessed IDs)")
         new_label = label(to)
-        glob = texts["global/CLAUDE.md"]
+        glob = texts["rores/global/CLAUDE.md"]
         if role == "main":
             entry = EFFORT_ENTRY.search(glob)
             if not effort:
@@ -117,35 +117,35 @@ def plan_edits(root, moves, note, effort, today):
                 continue
             if not example or example.group(1) != to:  # a new model, or a dated ID of the same one
                 glob = once(glob, CURRENT.pattern, lambda m: f"**Current choice ({today}): {new_label}.** {note.strip()}",
-                            "global/CLAUDE.md 'Current choice' line")
+                            "rores/global/CLAUDE.md 'Current choice' line")
                 glob = once(glob, r"as a full model ID \(`claude-[a-z]+-\d+-\d+(?:-\d{8})?`\)",
-                            lambda m: f"as a full model ID (`{to}`)", "global/CLAUDE.md main-session model example")
+                            lambda m: f"as a full model ID (`{to}`)", "rores/global/CLAUDE.md main-session model example")
             glob = once(glob, EFFORT_ENTRY.pattern,
                         lambda m: f"for the main session ({new_label}: `{effort}`, owner decision {today})",
-                        "global/CLAUDE.md main-session effort entry")
+                        "rores/global/CLAUDE.md main-session effort entry")
             texts["README.md"] = once(texts["README.md"],
                                       r'`"model": "claude-[a-z]+-\d+-\d+(?:-\d{8})?"`, and `\w+` effort under `modelSettings`',
                                       lambda m: f'`"model": "{to}"`, and `{effort}` effort under `modelSettings`',
                                       "README.md main-session settings line")
-            texts["global/CLAUDE.md"], main_label = glob, new_label
+            texts["rores/global/CLAUDE.md"], main_label = glob, new_label
             continue
         old = pins[role]
         if old == to:
             continue
-        old_label, agent = label(old), f"agents/{role}.md"
+        old_label, agent = label(old), f"rores/agents/{role}.md"
         texts[agent] = once(texts[agent], rf"^model: {re.escape(old)}$", f"model: {to}", f"{agent} model line")
         glob = once(glob, rf"^(- \*\*{re.escape(role)}\*\* \(){re.escape(old_label)}\)", rf"\g<1>{new_label})",
-                    f"global/CLAUDE.md '**{role}** ({old_label})' line")
+                    f"rores/global/CLAUDE.md '**{role}** ({old_label})' line")
         because = "moved with the main session, which must differ" if role == "hard-reviewer" and moves[0][0] == "main" \
             else f"switch test: {note.strip()}"
         line = f"Switch ({today}): {role} → {new_label} (`{to}`); {because}"
         previous = rf"^Switch \(\d{{4}}-\d{{2}}-\d{{2}}\): {re.escape(role)} → .*$"
         if re.search(previous, glob, re.M):
-            glob = once(glob, previous, lambda m: line, f"global/CLAUDE.md Switch line for {role}")
+            glob = once(glob, previous, lambda m: line, f"rores/global/CLAUDE.md Switch line for {role}")
         else:
             glob = once(glob, r"^(\*\*Current choice \(.*)$", lambda m: m.group(1) + "\n" + line,
-                        "global/CLAUDE.md 'Current choice' line")
-        texts["global/CLAUDE.md"] = glob
+                        "rores/global/CLAUDE.md 'Current choice' line")
+        texts["rores/global/CLAUDE.md"] = glob
         texts["README.md"] = once(texts["README.md"], rf"^(\| `{re.escape(agent)}` \|[^|\n]*\| ){re.escape(old_label)}:",
                                   rf"\g<1>{new_label}:", f"README.md row for {agent}")
         pins[role] = to
@@ -225,10 +225,10 @@ def self_test():
         base = snapshot()
         # today's state, read from the copy (never assumed: the real switch changes it)
         _, label = from_check(copy)
-        glob0 = (copy / "global" / "CLAUDE.md").read_text(encoding="utf-8")
+        glob0 = (copy / "rores" / "global" / "CLAUDE.md").read_text(encoding="utf-8")
         main_id = re.search(r"as a full model ID \(`([^`]+)`\)", glob0).group(1)
         main_label, main_effort = CURRENT.search(glob0).group(2), EFFORT_ENTRY.search(glob0).group(2)
-        hr_id = pin((copy / "agents" / "hard-reviewer.md").read_text(encoding="utf-8"))
+        hr_id = pin((copy / "rores" / "agents" / "hard-reviewer.md").read_text(encoding="utf-8"))
         hr_label = label(hr_id)
         cands.write_text(cands.read_text() + f"{hr_id} self-test: the model the switch back returns to\n")
         base = snapshot()  # the copy as every later step starts from
@@ -254,7 +254,7 @@ def self_test():
                   root=Path.home() / ".claude" / "switch-model-self-test")
         if out.returncode == 0 or "inside ~/.claude" not in out.stderr:
             problems.append("a root inside ~/.claude was not refused")
-        agent = copy / "agents" / "builder.md"
+        agent = copy / "rores" / "agents" / "builder.md"
         good = agent.read_bytes()
         agent.write_bytes(good.replace(b"model: claude-", b"model: not-a-pin-"))
         broken = snapshot()
@@ -269,26 +269,26 @@ def self_test():
 
         out = run("--role", "hard-reviewer", "--to", "claude-test-9-9", "--note", "13/19")
         after = snapshot()
-        if out.returncode != 0 or changed(base, after) != ["README.md", "agents/hard-reviewer.md", "global/CLAUDE.md"]:
+        if out.returncode != 0 or changed(base, after) != ["README.md", "rores/agents/hard-reviewer.md", "rores/global/CLAUDE.md"]:
             problems.append(f"the switch changed {changed(base, after)}: {out.stdout + out.stderr}")
         else:
-            for rel, removed, added in [("agents/hard-reviewer.md", 1, 1), ("README.md", 1, 1), ("global/CLAUDE.md", 1 + had_switch, 2)]:
+            for rel, removed, added in [("rores/agents/hard-reviewer.md", 1, 1), ("README.md", 1, 1), ("rores/global/CLAUDE.md", 1 + had_switch, 2)]:
                 diff = list(difflib.unified_diff(base[rel].decode().splitlines(), after[rel].decode().splitlines(), n=0, lineterm=""))
                 minus = [d for d in diff if d.startswith("-") and not d.startswith("---")]
                 plus = [d for d in diff if d.startswith("+") and not d.startswith("+++")]
                 if (len(minus), len(plus)) != (removed, added) or any(hr_label not in m and hr_id not in m for m in minus):
                     problems.append(f"{rel}: unexpected change {minus} -> {plus}")
-            text = after["global/CLAUDE.md"].decode()
+            text = after["rores/global/CLAUDE.md"].decode()
             if "- **hard-reviewer** (Test 9.9)" not in text or not re.search(r"^Switch \(\d{4}-\d\d-\d\d\): hard-reviewer → Test 9\.9 \(`claude-test-9-9`\); switch test: 13/19$", text, re.M):
-                problems.append("global/CLAUDE.md lacks the new role line or the Switch line")
+                problems.append("rores/global/CLAUDE.md lacks the new role line or the Switch line")
         out = run("--role", "hard-reviewer", "--to", "claude-test-9-9", "--note", "13/19")
         if out.returncode != 0 or "nothing to change" not in out.stdout or changed(after, snapshot()):
             problems.append("a second identical run changed something")
         out = run("--role", "hard-reviewer", "--to", hr_id, "--note", "back")
         back = snapshot()
         strip = lambda b: re.sub(rb"(?m)^Switch \([^\n]*\n", b"", b)
-        if out.returncode != 0 or changed(base, back) != ["global/CLAUDE.md"] or \
-                strip(back["global/CLAUDE.md"]) != strip(base["global/CLAUDE.md"]) or f"hard-reviewer → {hr_label}".encode() not in back["global/CLAUDE.md"]:
+        if out.returncode != 0 or changed(base, back) != ["rores/global/CLAUDE.md"] or \
+                strip(back["rores/global/CLAUDE.md"]) != strip(base["rores/global/CLAUDE.md"]) or f"hard-reviewer → {hr_label}".encode() not in back["rores/global/CLAUDE.md"]:
             problems.append(f"switching back did not restore every file except the Switch line: {changed(base, back)}")
 
         def restore(state):
@@ -296,7 +296,7 @@ def self_test():
                 (copy / rel).write_bytes(state[rel])
 
         def main_lines():
-            text = (copy / "global" / "CLAUDE.md").read_text(encoding="utf-8")
+            text = (copy / "rores" / "global" / "CLAUDE.md").read_text(encoding="utf-8")
             readme = (copy / "README.md").read_text(encoding="utf-8")
             found = (re.search(r"^\*\*Current choice \(\d{4}-\d\d-\d\d\): ([^.]+\.\d+)\.\*\*(.*)$", text, re.M),
                      re.search(r"for the main session \(([^:]+): `(\w+)`", text),
@@ -307,12 +307,12 @@ def self_test():
             return found[0].groups(), found[1].groups(), found[2].group(1), found[3].groups()
 
         out = run("--role", "main", "--to", main_id, "--effort", other_effort, "--note", "effort only")
-        if out.returncode != 0 or changed(back, snapshot()) != ["README.md", "global/CLAUDE.md"] or main_lines()[1:] != \
+        if out.returncode != 0 or changed(back, snapshot()) != ["README.md", "rores/global/CLAUDE.md"] or main_lines()[1:] != \
                 ((main_label, other_effort), main_id, (main_id, other_effort)) or main_lines()[0][0] != main_label:
             problems.append(f"an effort-only main switch is wrong: {main_lines()} {out.stdout + out.stderr}")
         restore(back)
         out = run("--role", "main", "--to", "claude-test-9-9", "--effort", "high", "--note", "replay: 0 MAJOR")
-        if out.returncode != 0 or changed(back, snapshot()) != ["README.md", "global/CLAUDE.md"] or main_lines() != \
+        if out.returncode != 0 or changed(back, snapshot()) != ["README.md", "rores/global/CLAUDE.md"] or main_lines() != \
                 (("Test 9.9", " replay: 0 MAJOR"), ("Test 9.9", "high"), "claude-test-9-9", ("claude-test-9-9", "high")) \
                 or "/model claude-test-9-9" not in out.stdout:
             problems.append(f"the main-session switch is wrong: {main_lines()} {out.stdout + out.stderr}")
@@ -332,19 +332,19 @@ def self_test():
         if out.returncode == 0 or "in the same command" not in out.stderr or changed(moved, snapshot()):
             problems.append(f"a main session on hard-reviewer's model was not refused with the way out: {out.stderr}")
         out = run("--role", "main", "--to", "claude-test-9-9", "--effort", "high", "--hard-reviewer", main_id, "--note", "b")
-        pinned = re.search(r"^model: (\S+)$", (copy / "agents" / "hard-reviewer.md").read_text(encoding="utf-8"), re.M).group(1)
+        pinned = re.search(r"^model: (\S+)$", (copy / "rores" / "agents" / "hard-reviewer.md").read_text(encoding="utf-8"), re.M).group(1)
         moved_line = f"hard-reviewer → {main_label} (`{main_id}`); moved with the main session, which must differ"
         if out.returncode != 0 or pinned != main_id or main_lines()[0][0] != "Test 9.9" or \
-                moved_line not in (copy / "global" / "CLAUDE.md").read_text(encoding="utf-8"):
+                moved_line not in (copy / "rores" / "global" / "CLAUDE.md").read_text(encoding="utf-8"):
             problems.append(f"moving the main session and hard-reviewer in one command failed: {out.stdout + out.stderr}")
         restore(back)
         # an anchor check.py does not guard (the effort entry's "owner decision" date) is missing: refused, nothing written
-        (copy / "global" / "CLAUDE.md").write_bytes(re.sub(rb", owner decision \d{4}-\d\d-\d\d\)", b")", back["global/CLAUDE.md"], count=1))
+        (copy / "rores" / "global" / "CLAUDE.md").write_bytes(re.sub(rb", owner decision \d{4}-\d\d-\d\d\)", b")", back["rores/global/CLAUDE.md"], count=1))
         odd = snapshot()
         out = run("--role", "main", "--to", "claude-test-9-9", "--effort", "high", "--note", "x")
         if out.returncode == 0 or "expected exactly one match, found 0" not in out.stderr or changed(odd, snapshot()):
             problems.append(f"a missing anchor did not refuse the whole switch: {out.stdout + out.stderr}")
-        (copy / "global" / "CLAUDE.md").write_bytes(back["global/CLAUDE.md"])
+        (copy / "rores" / "global" / "CLAUDE.md").write_bytes(back["rores/global/CLAUDE.md"])
 
         checker = copy / "scripts" / "check.py"  # a check that fails only after the edit: everything restored
         checker.write_text(checker.read_text(encoding="utf-8").replace(
@@ -367,7 +367,7 @@ def main():
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--role", choices=[*ROLES, "main"])
     parser.add_argument("--to", help="full model ID: pinned by an agent or listed in switch-test/candidates.txt")
-    parser.add_argument("--note", help="the switch test's numbers, written into global/CLAUDE.md")
+    parser.add_argument("--note", help="the switch test's numbers, written into rores/global/CLAUDE.md")
     parser.add_argument("--effort", choices=EFFORTS, help="--role main only: the owner's effort for the main session")
     parser.add_argument("--hard-reviewer", metavar="ID", help="--role main only: move hard-reviewer in the same edit "
                         "(it must differ from the main session)")

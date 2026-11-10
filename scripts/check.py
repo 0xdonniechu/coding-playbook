@@ -64,14 +64,14 @@ def split_frontmatter(rel):
 
 
 def model_label(model_id):
-    """claude-sonnet-5-5 -> 'Sonnet 5.5', the way global/CLAUDE.md names it."""
+    """claude-sonnet-5-5 -> 'Sonnet 5.5', the way rores/global/CLAUDE.md names it."""
     _, family, major, minor = model_id.split("-")[:4]
     return f"{family.capitalize()} {major}.{minor}"
 
 
 agents = {}
-for path in sorted((ROOT / "agents").glob("*.md")):
-    rel = f"agents/{path.name}"
+for path in sorted((ROOT / "rores" / "agents").glob("*.md")):
+    rel = f"rores/agents/{path.name}"
     fields, body = split_frontmatter(rel)
     name = path.stem
     agents[name] = (fields, body)
@@ -89,27 +89,27 @@ for path in sorted((ROOT / "agents").glob("*.md")):
             fail(f"{rel}: unknown tools {sorted(unknown)}")
 
 if set(agents) != AGENTS:
-    fail(f"agents/: expected {sorted(AGENTS)}, found {sorted(agents)}")
+    fail(f"rores/agents/: expected {sorted(AGENTS)}, found {sorted(agents)}")
 
 rev, hard = agents.get("reviewer", ({}, None)), agents.get("hard-reviewer", ({}, None))
 if rev[1] is None or hard[1] is None or rev[1] != hard[1]:
-    fail("agents/hard-reviewer.md body differs from agents/reviewer.md body (edit reviewer.md, then copy its body)")
+    fail("rores/agents/hard-reviewer.md body differs from rores/agents/reviewer.md body (edit reviewer.md, then copy its body)")
 for name, (fields, _) in agents.items():
     writers = {"Write", "Edit", "NotebookEdit"} & {t.strip() for t in fields.get("tools", "Write").split(",")}
     if "reviewer" in name and writers:
-        fail(f"agents/{name}.md: a reviewer needs an explicit tools list without {sorted(writers)}")
+        fail(f"rores/agents/{name}.md: a reviewer needs an explicit tools list without {sorted(writers)}")
 
 for name, hooks in GUARDED.items():
-    text = read(f"agents/{name}.md").split("\n---\n", 1)[0]
+    text = read(f"rores/agents/{name}.md").split("\n---\n", 1)[0]
     blocks = re.split(r"\n  (?=\w+:\n)", text.split("\nhooks:\n", 1)[1]) if "\nhooks:\n" in text else []
     for event, matcher, mode in hooks:
         block = next((b for b in blocks if b.lstrip().startswith(f"{event}:")), "")
         if GUARD_COMMAND.format(mode=mode) not in block or (matcher and f'- matcher: "{matcher}"' not in block):
-            fail(f"agents/{name}.md: no {event} hook running agent-guard.py {mode}" + (f" on {matcher}" if matcher else ""))
+            fail(f"rores/agents/{name}.md: no {event} hook running agent-guard.py {mode}" + (f" on {matcher}" if matcher else ""))
 for name, (fields, _) in agents.items():
     tools = {t.strip() for t in fields.get("tools", "Bash").split(",")}
     if name not in GUARDED and tools & {"Bash", "PowerShell"}:
-        fail(f"agents/{name}.md: has a shell but no agent-guard hook (add it to GUARDED in check.py and to its frontmatter)")
+        fail(f"rores/agents/{name}.md: has a shell but no agent-guard hook (add it to GUARDED in check.py and to its frontmatter)")
 try:  # the settings file an autonomous run loads: the boundary hook before and after every tool, and at each stop
     auto = json.loads(read("hooks/autonomous-settings.json"))
     want = {"PreToolUse": ("*", "boundary"), "PostToolUse": ("*", "boundary-after"), "Stop": (None, "boundary-stop"),
@@ -175,38 +175,38 @@ guard = subprocess.run([sys.executable, str(ROOT / "hooks" / "agent-guard.py"), 
 if guard.returncode != 0:
     fail("hooks/agent-guard.py --self-test failed:\n" + guard.stdout.strip())
 
-global_md = read("global/CLAUDE.md")
+global_md = read("rores/global/CLAUDE.md")
 for name in sorted(AGENTS & set(agents)):
     model = agents[name][0].get("model", "")
     if PINNED.match(model) and f"**{name}** ({model_label(model)})" not in global_md:
-        fail(f"global/CLAUDE.md: does not list '**{name}** ({model_label(model)})', the model pinned in agents/{name}.md")
+        fail(f"rores/global/CLAUDE.md: does not list '**{name}** ({model_label(model)})', the model pinned in rores/agents/{name}.md")
 readme_md = read("README.md")
 for name in sorted(AGENTS & set(agents)):
     model = agents[name][0].get("model", "")
-    if PINNED.match(model) and not re.search(rf"^\| `agents/{re.escape(name)}\.md` \|[^|\n]*\| {re.escape(model_label(model))}:", readme_md, re.M):
-        fail(f"README.md: the row for agents/{name}.md does not start with '{model_label(model)}:', the model pinned there")
+    if PINNED.match(model) and not re.search(rf"^\| `rores/agents/{re.escape(name)}\.md` \|[^|\n]*\| {re.escape(model_label(model))}:", readme_md, re.M):
+        fail(f"README.md: the row for rores/agents/{name}.md does not start with '{model_label(model)}:', the model pinned there")
 efforts = {n: agents[n][0].get("effort") for n in AGENTS & set(agents)}
 if efforts.get("reviewer") == efforts.get("hard-reviewer"):
     line = f"builder, reviewers `{efforts.get('builder')}`, transcriber `{efforts.get('transcriber')}`"
     if efforts.get("builder") == efforts.get("reviewer"):
         if line not in global_md:
-            fail(f"global/CLAUDE.md: the effort line does not read '{line}' (the agent files' efforts)")
+            fail(f"rores/global/CLAUDE.md: the effort line does not read '{line}' (the agent files' efforts)")
     else:
-        fail("agents/: builder and reviewers have different efforts; update global/CLAUDE.md's effort line and check.py together")
+        fail("rores/agents/: builder and reviewers have different efforts; update rores/global/CLAUDE.md's effort line and check.py together")
 else:
-    fail("agents/: reviewer and hard-reviewer have different efforts (they must review alike)")
+    fail("rores/agents/: reviewer and hard-reviewer have different efforts (they must review alike)")
 if "Current choice" not in global_md:
-    fail("global/CLAUDE.md: no 'Current choice' line for the main session model")
+    fail("rores/global/CLAUDE.md: no 'Current choice' line for the main session model")
 # The main session's model and effort, written in three places (scripts/switch-model.py --role main edits all three)
 choice = re.search(r"^\*\*Current choice \(\d{4}-\d{2}-\d{2}\): ([A-Z][a-z]+ \d+\.\d+)\.\*\*", global_md, re.M)
 entry = re.search(r"for the main session \(([A-Z][a-z]+ \d+\.\d+): `(\w+)`", global_md)
 example = re.search(r"as a full model ID \(`(claude-[a-z]+-\d+-\d+)", global_md)
 settings_line = re.search(r'`"model": "(claude-[a-z]+-\d+-\d+)[^"]*"`, and `(\w+)` effort under `modelSettings`', readme_md)
 if not (choice and entry and example and settings_line):
-    fail("global/CLAUDE.md or README.md: the main session's Current choice, effort entry, model example or settings line is missing")
+    fail("rores/global/CLAUDE.md or README.md: the main session's Current choice, effort entry, model example or settings line is missing")
 elif len({choice.group(1), entry.group(1), model_label(example.group(1)), model_label(settings_line.group(1))}) != 1 \
         or entry.group(2) != settings_line.group(2):
-    fail(f"global/CLAUDE.md and README.md disagree on the main session: Current choice {choice.group(1)}, effort entry "
+    fail(f"rores/global/CLAUDE.md and README.md disagree on the main session: Current choice {choice.group(1)}, effort entry "
          f"{entry.group(1)} `{entry.group(2)}`, example {example.group(1)}, README {settings_line.group(1)} `{settings_line.group(2)}`")
 
 # The model switch kit (APS-45): cases valid (its self-test), and no model ID in the kit that nobody chose: the agents'
@@ -251,25 +251,25 @@ for section in TEMPLATE_SECTIONS:
 if "## HARD" in template and "hard-reviewer" not in template.split("## HARD", 1)[1].split("\n", 1)[0]:
     fail("skills/starter-kit/project-CLAUDE.md: the HARD heading does not name hard-reviewer")
 
-defaults_text = read("global/settings-defaults.json")
+defaults_text = read("rores/global/settings-defaults.json")
 try:
     defaults = json.loads(defaults_text) if defaults_text else {}
 except ValueError as error:
-    fail(f"global/settings-defaults.json: not valid JSON ({error})")
+    fail(f"rores/global/settings-defaults.json: not valid JSON ({error})")
     defaults = {}
 if not isinstance(defaults, dict) or set(defaults) - DEFAULT_KEYS:
-    fail(f"global/settings-defaults.json: only {sorted(DEFAULT_KEYS)} may be set; the rest of settings.json is the owner's")
+    fail(f"rores/global/settings-defaults.json: only {sorted(DEFAULT_KEYS)} may be set; the rest of settings.json is the owner's")
 elif any(not isinstance(defaults.get(key, {}), dict) for key in DEFAULT_KEYS):
-    fail(f"global/settings-defaults.json: {sorted(DEFAULT_KEYS)} must each be an object")
+    fail(f"rores/global/settings-defaults.json: {sorted(DEFAULT_KEYS)} must each be an object")
 else:
     for name, value in (defaults.get("enabledPlugins") or {}).items():
         if not isinstance(value, bool):
-            fail(f"global/settings-defaults.json: enabledPlugins.{name} must be true or false")
+            fail(f"rores/global/settings-defaults.json: enabledPlugins.{name} must be true or false")
     for name, value in (defaults.get("skillOverrides") or {}).items():
         if value not in OVERRIDES:
-            fail(f"global/settings-defaults.json: skillOverrides.{name} '{value}' is not one of {sorted(OVERRIDES)}")
+            fail(f"rores/global/settings-defaults.json: skillOverrides.{name} '{value}' is not one of {sorted(OVERRIDES)}")
     if set(defaults.get("skillOverrides") or {}) & (SKILLS - HAND_INVOKED):
-        fail("global/settings-defaults.json: must not override this repo's own skills (only " + ", ".join(sorted(HAND_INVOKED)) + " may be set there)")
+        fail("rores/global/settings-defaults.json: must not override this repo's own skills (only " + ", ".join(sorted(HAND_INVOKED)) + " may be set there)")
 
 skills = sorted(p.name for p in (ROOT / "skills").iterdir() if p.is_dir()) if (ROOT / "skills").is_dir() else []
 if set(skills) != SKILLS:
