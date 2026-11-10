@@ -1,7 +1,7 @@
 # roles-assign: which model does which job in Claude Code, and the skills and scripts that go with it
 
 ## What it does
-The four subagents (builder, reviewer, hard-reviewer, transcriber), the global instructions, three skills (`starter-kit`, `handoff`, `sdlc`), the builder dispatch and sdlc check scripts, a one-command model switch, plus a check script and an installer. Standard library Python only. Every session on every machine follows these files, so a wrong rule rates HARD work as EASY or lets an unreviewed change through.
+The four subagents (builder, reviewer, hard-reviewer, transcriber), the global instructions, six skills (`starter-kit`, `handoff`, `sdlc`, `market-research`, `teardown`, `orca-worktree-setup`), the builder dispatch and sdlc check scripts, a one-command model switch, plus a check script and an installer. Standard library Python only. Every session on every machine follows these files, so a wrong rule rates HARD work as EASY or lets an unreviewed change through.
 
 ## Verify
 - `python3 scripts/check.py`: agent frontmatter and pinned models, `hard-reviewer` body equal to `reviewer` body, `global/CLAUDE.md` matches the pins, the starter-kit template's sections, skill frontmatter, `settings-defaults.json`, and the self-tests of `dispatch.py`, `sdlc-check.py` and `switch-model.py`.
