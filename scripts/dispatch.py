@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepares a builder dispatch: a worktree and the task contract the builder works to.
+"""Prepares a builder dispatch: a worktree and the task contract agent-guard holds the builder to (APS-46).
 
     python3 scripts/dispatch.py new <repo> <branch> --allow <glob>... [--forbid <glob>...] --check <cmd> [--check <cmd>]
     python3 scripts/dispatch.py contract <tree> --allow <glob>... [--forbid <glob>...] --check <cmd> [...]
@@ -9,11 +9,11 @@
     python3 scripts/dispatch.py --self-test
 
 `new` adds a worktree `<repo>-<slug>` beside the repo, on a new branch from the repo's HEAD (slug: the branch name
-without a leading ticket prefix such as `abc-12-`), and writes its contract. `contract` writes or replaces the contract of an existing
+without its `aps-NN-` prefix), and writes its contract. `contract` writes or replaces the contract of an existing
 tree (one builder in the main checkout, or a wider task for a second round; never while a builder runs there).
-The contract is `agent-contract.json` in the tree's git folder (scripts/contract.py reads it): the builder
-edits only inside `allow` and outside `forbid` and names every check in its report. Nothing here blocks a write; the
-main session holds the builder to it by running `sdlc-check.py converge` on the diff and rerunning the checks. `--task <plan> <id>` takes allow, forbid and checks from that `(builder)` task in the plan's `## Tasks` section
+The contract is `agent-contract.json` in the tree's git folder, where agent-guard (`build`, `build-after`,
+`build-stop`) reads it: Edit and Write only inside `allow` and outside `forbid`, any other change locks the run to
+reading, and the builder names every check in its report. `--task <plan> <id>` takes allow, forbid and checks from that `(builder)` task in the plan's `## Tasks` section
 (read by `sdlc-check.py`'s parser; the formats are in the sdlc skill) instead of flags typed by hand, and refuses
 flags beside it, an unknown id, a `(main)` task and a `not needed` one. `done` removes the contract, and a linked worktree too
 when nothing in it is uncommitted; the branch stays. Run `done` from the repo, not from inside the worktree (Windows
@@ -31,7 +31,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-CONTRACT_NAME = "agent-contract.json"  # the same name scripts/contract.py reads
+CONTRACT_NAME = "agent-contract.json"
 
 
 class Refused(Exception):
@@ -104,11 +104,11 @@ def brief(top, data):
     forbid = f"; never {', '.join(data['forbid'])}" if data["forbid"] else ""
     return (f"Give the builder:\n"
             f"  Work only in {top} (`cd {top}` first; give paths under it).\n"
-            f"  Your task contract: you may change {', '.join(data['allow'])}"
+            f"  Your task contract (agent-guard enforces it): you may change {', '.join(data['allow'])}"
             f"{forbid}. Run each check and name it verbatim in your report with its result: "
             + "; ".join(f"`{c}`" for c in data["checks"]) + ".\n"
-            "Allow every file a check or formatter rewrites (lock files, snapshots, generated code), or the diff "
-            "falls outside the contract. Afterwards rerun the checks yourself, then `dispatch.py done` once the work is committed.")
+            "Allow every file a check or formatter rewrites (lock files, snapshots, generated code), or the run "
+            "locks. Afterwards rerun the checks yourself, then `dispatch.py done` once the work is committed.")
 
 
 def load_sdlc():
@@ -157,7 +157,7 @@ def cmd_new(args):
         raise Refused(f"{args.branch!r} is not a valid branch name")
     if git(repo, "rev-parse", "-q", "--verify", f"refs/heads/{args.branch}", check=False):
         raise Refused(f"branch {args.branch} already exists; pick a new one, or use `contract` on its tree")
-    slug = re.sub(r"^[a-z]+-\d+-", "", args.branch, flags=re.I).replace("/", "-")
+    slug = re.sub(r"^aps-\d+-", "", args.branch, flags=re.I).replace("/", "-")
     target = repo.parent / f"{repo.name}-{slug}"
     if target.exists():
         raise Refused(f"{target} already exists")
@@ -230,43 +230,46 @@ def self_test():
             if out.returncode != 1 or reason not in out.stderr:
                 problems.append(f"{label}: not refused for {reason!r}: {out.stdout + out.stderr}")
 
-        out = run("new", str(repo), "job-9-parser", "--allow", "src/**", "--forbid", "src/b.py", "--check", "make test")
+        out = run("new", str(repo), "aps-9-parser", "--allow", "src/**", "--forbid", "src/b.py", "--check", "make test")
         wt = Path(tmp) / "proj-parser"
         cfile = Path(git(wt, "rev-parse", "--absolute-git-dir")) / CONTRACT_NAME if wt.exists() else None
         data = json.loads(cfile.read_text()) if cfile and cfile.exists() else {}
-        if out.returncode != 0 or git(wt, "branch", "--show-current", check=False) != "job-9-parser" or \
+        if out.returncode != 0 or git(wt, "branch", "--show-current", check=False) != "aps-9-parser" or \
                 data.get("allow") != ["src/**"] or data.get("forbid") != ["src/b.py"] or data.get("checks") != ["make test"] \
                 or data.get("version") != 1 or "Give the builder" not in out.stdout:
             problems.append(f"new: wrong worktree or contract: {data} {out.stdout + out.stderr}")
         if git(repo, "status", "--porcelain") or (Path(git(repo, "rev-parse", "--absolute-git-dir")) / CONTRACT_NAME).exists():
             problems.append("new: the main checkout changed or got a contract")
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        sys.dont_write_bytecode = True  # no __pycache__ beside the scripts
-        from contract import read_contract  # the contract must read back as written
-        seen = read_contract(str(wt)) if wt.exists() else None  # the contract must read back as written
-        if wt.exists() and (not seen or seen.get("broken") or seen.get("allow") != ["src/**"]
-                            or seen.get("forbid") != ["src/b.py"] or seen.get("checks") != ["make test"]):
-            problems.append(f"read_contract reads the written contract differently: {seen}")
+        guard_file = Path(__file__).resolve().parent.parent / "hooks" / "agent-guard.py"
+        if guard_file.exists() and wt.exists():  # the contract must read the same way in the guard that enforces it
+            spec = importlib.util.spec_from_file_location("agent_guard", guard_file)
+            guard = importlib.util.module_from_spec(spec)
+            sys.dont_write_bytecode = True  # no __pycache__ beside the pinned hook
+            spec.loader.exec_module(guard)
+            seen = guard.read_contract(str(wt))
+            if not seen or seen.get("broken") or seen.get("allow") != ["src/**"] or seen.get("forbid") != ["src/b.py"] \
+                    or seen.get("checks") != ["make test"]:
+                problems.append(f"agent-guard reads the written contract differently: {seen}")
         (Path(tmp) / "proj-taken").mkdir()
-        refused("a target folder that exists", run("new", str(repo), "job-9-taken", "--allow", "x", "--check", "t"),
+        refused("a target folder that exists", run("new", str(repo), "aps-9-taken", "--allow", "x", "--check", "t"),
                 "already exists")
         if not (Path(tmp) / "proj-taken").is_dir() or \
-                git(repo, "rev-parse", "-q", "--verify", "refs/heads/job-9-taken", check=False):
+                git(repo, "rev-parse", "-q", "--verify", "refs/heads/aps-9-taken", check=False):
             problems.append("a refused new (target folder exists) made the branch")
-        refused("a branch that exists", run("new", str(repo), "job-9-parser", "--allow", "x", "--check", "t"), "already exists")
-        git(repo, "branch", "job-9-kept")
-        refused("a branch without a worktree", run("new", str(repo), "job-9-kept", "--allow", "x", "--check", "t"), "pick a new one")
+        refused("a branch that exists", run("new", str(repo), "aps-9-parser", "--allow", "x", "--check", "t"), "already exists")
+        git(repo, "branch", "aps-9-kept")
+        refused("a branch without a worktree", run("new", str(repo), "aps-9-kept", "--allow", "x", "--check", "t"), "pick a new one")
         before = sorted(p.name for p in Path(tmp).iterdir())
-        refused("no --allow", run("new", str(repo), "job-9-other", "--check", "t"), "--allow and --check")
-        refused("'..'", run("new", str(repo), "job-9-other", "--allow", "../x", "--check", "t"), "steps out")
-        refused("absolute", run("new", str(repo), "job-9-other", "--allow", "/etc/x", "--check", "t"), "absolute")
-        refused("git folder", run("new", str(repo), "job-9-other", "--allow", ".git/**", "--check", "t"), "git folder")
-        refused("a blank check", run("new", str(repo), "job-9-other", "--allow", "x", "--check", " "), "--check is empty")
-        if sorted(p.name for p in Path(tmp).iterdir()) != before or git(repo, "rev-parse", "-q", "--verify", "refs/heads/job-9-other", check=False):
+        refused("no --allow", run("new", str(repo), "aps-9-other", "--check", "t"), "--allow and --check")
+        refused("'..'", run("new", str(repo), "aps-9-other", "--allow", "../x", "--check", "t"), "steps out")
+        refused("absolute", run("new", str(repo), "aps-9-other", "--allow", "/etc/x", "--check", "t"), "absolute")
+        refused("git folder", run("new", str(repo), "aps-9-other", "--allow", ".git/**", "--check", "t"), "git folder")
+        refused("a blank check", run("new", str(repo), "aps-9-other", "--allow", "x", "--check", " "), "--check is empty")
+        if sorted(p.name for p in Path(tmp).iterdir()) != before or git(repo, "rev-parse", "-q", "--verify", "refs/heads/aps-9-other", check=False):
             problems.append("a refused new left a folder or a branch")
         refused("~/.claude", run("contract", str(Path.home() / ".claude"), "--allow", "x", "--check", "t"), "inside ~/.claude")
 
-        out2 = run("new", str(repo), "job-9-docs", "--allow", "docs/**", "--check", "make docs")
+        out2 = run("new", str(repo), "aps-9-docs", "--allow", "docs/**", "--check", "make docs")
         wt2 = Path(tmp) / "proj-docs"
         c2 = Path(git(wt2, "rev-parse", "--absolute-git-dir")) / CONTRACT_NAME if wt2.exists() else None
         if out2.returncode != 0 or not c2 or c2 == cfile or json.loads(c2.read_text())["allow"] != ["docs/**"] or \
@@ -293,7 +296,7 @@ def self_test():
             problems.append(f"a refused worktree remove lost the tree or its contract: {out.stdout + out.stderr}")
         git(repo, "worktree", "unlock", str(wt))
         out = run("done", str(wt))
-        if out.returncode != 0 or wt.exists() or not git(repo, "rev-parse", "-q", "--verify", "refs/heads/job-9-parser", check=False):
+        if out.returncode != 0 or wt.exists() or not git(repo, "rev-parse", "-q", "--verify", "refs/heads/aps-9-parser", check=False):
             problems.append(f"done: the worktree was not removed or the branch went with it: {out.stdout + out.stderr}")
 
         plan = Path(tmp) / "x.plan.md"
@@ -302,13 +305,13 @@ def self_test():
                         "- allow: `hooks/**`\n- check: `make test`\n\n### T3 (builder) Docs\n- allow: `docs/**`\n"
                         "- check: `make docs`\n- not needed: merged into T1\n\n## Proof\n1. tests\n")
         flags = ("--allow", "src/**", "tests/**", "--forbid", "src/b.py", "--check", "make test", "--check", "make lint")
-        out_t, out_f = run("new", str(repo), "job-9-fromtask", "--task", str(plan), "T1"), run("new", str(repo), "job-9-fromflags", *flags)
+        out_t, out_f = run("new", str(repo), "aps-9-fromtask", "--task", str(plan), "T1"), run("new", str(repo), "aps-9-fromflags", *flags)
         read = lambda name: json.loads((Path(git(Path(tmp) / name, "rev-parse", "--absolute-git-dir")) / CONTRACT_NAME).read_text()) \
             if (Path(tmp) / name).exists() else {}
         from_task, from_flags = read("proj-fromtask"), read("proj-fromflags")
         strip = lambda d: {k: v for k, v in d.items() if k not in ("task", "written")}
         if out_t.returncode != 0 or out_f.returncode != 0 or not from_task or strip(from_task) != strip(from_flags) \
-                or from_task.get("task") != "job-9-fromtask T1" or "make lint" not in out_t.stdout:
+                or from_task.get("task") != "aps-9-fromtask T1" or "make lint" not in out_t.stdout:
             problems.append(f"--task: the contract differs from the same flags: {from_task} vs {from_flags} {out_t.stderr}")
         (Path(tmp) / "old.plan.md").write_text("## Steps\n1. x\n")
         (Path(tmp) / "bad.plan.md").write_text("")
@@ -316,19 +319,19 @@ def self_test():
         solo.mkdir()
         (solo / "dispatch.py").write_text(Path(__file__).read_text(encoding="utf-8"), encoding="utf-8")
         before = sorted(p.name for p in Path(tmp).iterdir())
-        refused("--task with flags", run("new", str(repo), "job-9-t", "--task", str(plan), "T1", "--check", "x"), "drop --allow")
-        refused("--task unknown id", run("new", str(repo), "job-9-t", "--task", str(plan), "T9"), "has no task T9")
-        refused("--task main task", run("new", str(repo), "job-9-t", "--task", str(plan), "T2"), "is a (main) task")
-        refused("--task not needed", run("new", str(repo), "job-9-t", "--task", str(plan), "T3"), "marked not needed")
-        refused("--task no Tasks", run("new", str(repo), "job-9-t", "--task", str(Path(tmp) / "old.plan.md"), "T1"), "no `## Tasks`")
+        refused("--task with flags", run("new", str(repo), "aps-9-t", "--task", str(plan), "T1", "--check", "x"), "drop --allow")
+        refused("--task unknown id", run("new", str(repo), "aps-9-t", "--task", str(plan), "T9"), "has no task T9")
+        refused("--task main task", run("new", str(repo), "aps-9-t", "--task", str(plan), "T2"), "is a (main) task")
+        refused("--task not needed", run("new", str(repo), "aps-9-t", "--task", str(plan), "T3"), "marked not needed")
+        refused("--task no Tasks", run("new", str(repo), "aps-9-t", "--task", str(Path(tmp) / "old.plan.md"), "T1"), "no `## Tasks`")
         (Path(tmp) / "bad.plan.md").write_text("## Tasks\n### T1 (builder) X\n- allow: `../up/**`\n- check: `t`\n")
-        refused("--task glob out of the tree", run("new", str(repo), "job-9-t", "--task", str(Path(tmp) / "bad.plan.md"), "T1"), "steps out")
+        refused("--task glob out of the tree", run("new", str(repo), "aps-9-t", "--task", str(Path(tmp) / "bad.plan.md"), "T1"), "steps out")
         (Path(tmp) / "bad.plan.md").write_text("## Tasks\n### T1 (builder) X\n- allow: `a`\n- files: `b`\n- check: `t`\n")
-        refused("--task malformed plan", run("new", str(repo), "job-9-t", "--task", str(Path(tmp) / "bad.plan.md"), "T1"), "does not know")
+        refused("--task malformed plan", run("new", str(repo), "aps-9-t", "--task", str(Path(tmp) / "bad.plan.md"), "T1"), "does not know")
         refused("--task without sdlc-check.py", subprocess.run([sys.executable, str(solo / "dispatch.py"), "new", str(repo),
-                "job-9-t", "--task", str(plan), "T1"], capture_output=True, text=True), "which is missing")
-        refused("--task missing plan", run("new", str(repo), "job-9-t", "--task", str(Path(tmp) / "none.md"), "T1"), "none.md")
-        if sorted(p.name for p in Path(tmp).iterdir()) != before or git(repo, "rev-parse", "-q", "--verify", "refs/heads/job-9-t", check=False):
+                "aps-9-t", "--task", str(plan), "T1"], capture_output=True, text=True), "which is missing")
+        refused("--task missing plan", run("new", str(repo), "aps-9-t", "--task", str(Path(tmp) / "none.md"), "T1"), "none.md")
+        if sorted(p.name for p in Path(tmp).iterdir()) != before or git(repo, "rev-parse", "-q", "--verify", "refs/heads/aps-9-t", check=False):
             problems.append("a refused --task left a folder or a branch")
         out = run("contract", str(repo), "--task", str(plan), "T1")
         mc = Path(git(repo, "rev-parse", "--absolute-git-dir")) / CONTRACT_NAME

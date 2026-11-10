@@ -309,6 +309,24 @@ for args, code, stream in ((["--help"], 0, "stdout"), (["-h"], 0, "stdout"), (["
             fail(f"install.py {' '.join(args)}: expected exit {code}, usage on {stream} and nothing written; "
                  f"got exit {out.returncode}, wrote {sorted(p.name for p in Path(home).iterdir())}")
 
+# An earlier install's block (coding-playbook or claudecode-guide markers) is taken over, never duplicated: the reviewer
+# of the coding-playbook sync found a second full block appended (2026-11-10). Temporary HOME again.
+for legacy in ("coding-playbook", "claudecode-guide"):
+    with tempfile.TemporaryDirectory() as home:
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("XDG_", "CLAUDE"))
+               and k not in ("HOMEDRIVE", "HOMEPATH")} | {"HOME": home, "USERPROFILE": home}
+        claude = Path(home) / ".claude"
+        claude.mkdir()
+        (claude / "CLAUDE.md").write_text(f"# mine\n\n<!-- {legacy}:begin -->\nold block text\n<!-- {legacy}:end -->\n\n## local\nkeep me\n",
+                                          encoding="utf-8")
+        out = subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), "--global"], env=env,
+                             capture_output=True, text=True, timeout=120)
+        text = (claude / "CLAUDE.md").read_text(encoding="utf-8")
+        if out.returncode != 0 or text.count("<!-- roles-assign:begin -->") != 1 or text.count("<!-- roles-assign:end -->") != 1 \
+                or f"<!-- {legacy}:" in text or "old block text" in text or "keep me" not in text or "# mine" not in text:
+            fail(f"install.py --global over a '{legacy}' block: expected one roles-assign block, the old one gone and "
+                 f"the owner's text kept; got exit {out.returncode}, {text.count('roles-assign:begin')} block(s)")
+
 if failures:
     print("FAIL")
     for f in failures:

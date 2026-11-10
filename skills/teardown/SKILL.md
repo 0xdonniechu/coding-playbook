@@ -137,6 +137,6 @@ Teardown to understand why they win, then differentiate sharply in the gap. A co
 
 ## Continuous self-improvement
 
-1. **Eval after every run.** Grade the run against the checklist above: note any skipped steps or manual fixes required by the user, and propose updates directly to `SKILL.md` in `0xdonniechu/roles-assign` (private).
+1. **Eval after every run.** Grade the run against the checklist above: note any skipped steps or manual fixes required by the user, and propose updates directly to `SKILL.md` in the repo this skill is installed from (private).
 2. **Periodic tool & source refresh.** Re-verify any external tool or workflow reference that is more than a few months old.
 3. **Ask when out of bounds.** If a legal, licensing, or behavioral question is outside scope, state it plainly and ask the user—never guess.
