@@ -25,7 +25,7 @@ Three gates, all for the main session (a call that carries `agent_id` comes from
 
 Commands are read quote-aware over the whole text: heredoc bodies are dropped (any delimiter, quoted or backslashed),
 line continuations joined, `;`, `&&`, `||`, `|`, `&`, newlines and parentheses split commands only outside quotes,
-redirections and leading shell keywords and wrappers (`if`, `then`, `do`, `{`, `!`, `time -p`, `env`, `sudo`,
+each `$( … )` or backtick substitution counts as one word holding `$`, redirections and leading shell keywords and wrappers (`if`, `then`, `do`, `{`, `!`, `time -p`, `env`, `sudo`,
 `timeout 30`, ...) are dropped, and
 `cd`/`pushd` carry to later commands of the same subshell. These catch mistakes, not evasion: an interpreter or a
 script that runs git passes. The hook never blocks on its own error: it
@@ -230,9 +230,88 @@ REDIRECT_OP = re.compile(r"(\d*|&)(>>?|<)")
 REDIRECT = re.compile(r"^(\d*|&)(>>?|<)")
 
 
+def substitution_end(s, i):
+    """Index just past the `)` that closes a `$(` whose body starts at i; None when it never closes (the caller then
+    leaves the text as it is). A stack of contexts keeps nesting exact: code inside a substitution (with its own
+    parenthesis count, single quotes skipped whole) and double-quoted text (where `$(` opens a new substitution)."""
+    stack = [["sub", 0]]
+    while i < len(s):
+        c, top = s[i], stack[-1]
+        if c == "\\":
+            i += 2
+            continue
+        if top[0] == '"':
+            if c == '"':
+                stack.pop()
+            elif s.startswith("$(", i) and not s.startswith("$((", i):
+                stack.append(["sub", 0])
+                i += 2
+                continue
+        elif c == "'":
+            j = s.find("'", i + 1)
+            if j < 0:
+                return None
+            i = j + 1
+            continue
+        elif c == '"':
+            stack.append(['"'])
+        elif c == "(":
+            top[1] += 1
+        elif c == ")":
+            if top[1]:
+                top[1] -= 1
+            else:
+                stack.pop()
+                if not stack:
+                    return i + 1
+        i += 1
+    return None
+
+
+def blank_substitutions(s):
+    """Each `$( … )` and backtick substitution outside single quotes becomes the one word-safe token `$SUBST`, so
+    its inner words are not read as the outer command's arguments (`-b feat-$(git -C x rev-parse HEAD)`)."""
+    out, i, quote = [], 0, None
+    while i < len(s):
+        c = s[i]
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif c == "'" and quote is None:
+            quote = "'"
+        elif c == '"':
+            quote = None if quote == '"' else '"'
+        elif c == "\\":
+            out.append(s[i:i + 2])
+            i += 2
+            continue
+        elif s.startswith("$(", i) and not s.startswith("$((", i):
+            j = substitution_end(s, i + 2)
+            if j is None:
+                out.append(s[i:])
+                break
+            out.append("$SUBST")
+            i = j
+            continue
+        elif c == "`":
+            j = i + 1
+            while j < len(s) and s[j] != "`":
+                j += 2 if s[j] == "\\" else 1
+            if j >= len(s):
+                out.append(s[i:])
+                break
+            out.append("$SUBST")
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def split_words(piece, keep_redirects=False):
     """Words of one simple command; redirections (an unquoted operator and its target) dropped unless kept,
-    then with the operator stripped from the word."""
+    then with the operator stripped from the word. Substitutions count as one word, except when recording paths."""
+    if not keep_redirects:
+        piece = blank_substitutions(piece)
     try:
         words = shlex.split(piece)
         raw = shlex.split(piece, posix=False)
@@ -692,6 +771,14 @@ def self_test():
         def denied(out):
             return bool(out) and out["hookSpecificOutput"].get("permissionDecision") == "deny"
 
+        for raw, want in (("a $(b) c", "a $SUBST c"), ('a "$(b "$(c)" d)" e', 'a "$SUBST" e'),
+                          ("a $(echo ')') c", "a $SUBST c"), ('a $(echo "(") c', "a $SUBST c"),
+                          ("a $(echo (x)) c", "a $SUBST c"), ("a $(echo \\)) c", "a $SUBST c"),
+                          ("a $(echo 'x c", "a $(echo 'x c"), ("a `b \\`c\\`` d", "a $SUBST d"),
+                          ("a `b c", "a `b c"), ("a $((1+2)) c", "a $((1+2)) c"), ("'$(x)' $(y)", "'$(x)' $SUBST"),
+                          ('a $(b "$(c ")")" d) e', "a $SUBST e")):
+            if blank_substitutions(raw) != want:
+                problems.append(f"blank_substitutions({raw!r}) = {blank_substitutions(raw)!r}, expected {want!r}")
         heredoc_body = "cat > /tmp/x.md <<'EOF'\ngit checkout -b feature/x\ngit push origin feature/y\nEOF"
         quoted_heredoc = ('git commit -m "$(cat <<\'EOF\'\nFix parser (APS-66)\n\nRefuse "cd x && git checkout -b wip"'
                           ' and one more " quote\nEOF\n)"')
@@ -727,7 +814,15 @@ def self_test():
                  ("for x in a; do git checkout -b wip; done", True), ("if true; then :; else git checkout -b wip; fi", True),
                  ("! git checkout -b wip", True), ("sudo git checkout -b wip", True),
                  ("timeout 30 git checkout -b wip", True), ("timeout -s KILL 30 git checkout -b wip", True),
-                 ("xargs -n1 git checkout -b wip", True), ("sudo -u root git checkout -b wip", True),
+                 ("xargs -n1 git checkout -b wip", True),
+                 ("git checkout -q -b feat-$(git -C /x rev-parse --short HEAD) main", False),
+                 ("git checkout -b wip-`git -C /x rev-parse HEAD`", False), ("git checkout -b \"$(echo -C x)\"", False),
+                 ("git push \"$(git remote | tr -d '(')\" HEAD:main", True),
+                 ("git worktree add \"../$(basename \"$PWD\" | cut -d'(' -f1)-wt\" -b wip", True),
+                 ("git push origin `echo \\`echo b\\`` main", True), ("git push origin $(echo x main", True),
+                 ("git checkout -q -b aps-70-sync-$(git -C /x rev-parse --short \"$(git -C /x merge-base HEAD origin/main)\") main", False),
+                 ('git push origin "$(echo "$(echo b)")" HEAD:main "x)"', True),
+                 ("git checkout -b \"x-$(echo ')' -C y)\" main", False), ("git push origin `echo x main", True), ("sudo -u root git checkout -b wip", True),
                  ("env -u X git checkout -b wip", True), ("echo 'a << EOF'\ngit checkout -b wip", True),
                  ("cat <<EOF\nline one\ngit checkout -b wip\nEOF", False),
                  ("echo 'x' && cat <<EOF\ngit checkout -b wip\nEOF", False),
@@ -828,6 +923,10 @@ def self_test():
         if not denied(bash("git commit -qm x")):
             problems.append("review gate: a path inside a quoted string of a subagent call not recorded")
         clear("r10")
+        bash(f'cat "$(git -C {repo} rev-parse --show-toplevel)/x"', cwd=tmp, agent="r13")
+        if not denied(bash("git commit -qm x")):
+            problems.append("review gate: a -C path inside a subagent's substitution not recorded")
+        clear("r13")
         bash("cat " + " ".join(f"/tmp/nowhere-{k}/x" for k in range(45)) + f" {repo}/README", cwd=tmp, agent="r11")
         if not denied(bash("git commit -qm x")):
             problems.append("review gate: a path after many others not recorded")
