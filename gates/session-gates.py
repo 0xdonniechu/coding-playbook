@@ -112,8 +112,18 @@ def ansi_end(s, i):
     return j + 1 if j < len(s) else None
 
 
-CASE_WORD = re.compile(r"(case|esac)(?=[\s;&|)]|$)")
-CASE_BEFORE = re.compile(r"(?:[;&|(\n]|\b(?:then|do|else|elif)|[!{])[ \t]*$")  # a command starts here
+WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?=[\s;&|()<>]|$)")  # a whole word, as a keyword would be
+WORD_BEFORE = " \t\n;&|()"  # a word starts after one of these (or at the start)
+KEEP_COMMAND = {"then", "do", "else", "elif", "if", "while", "until", "time"}  # a command may follow these words
+BRACE_OP = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])(?:\[[^]\n]{0,200}\])?[%#]")
+# How a `'` inside a double-quoted `${ … }` reads: bash pairs it ("all"), dash pairs it only after the pattern
+# operators `#`, `##`, `%`, `%%` ("pattern"), zsh keeps it literal ("none"). commands() reads a command every way
+# when they can differ and checks every command any reading finds.
+# A command is also read with main's scanner as of APS-70 (`scan_end_main`), so a mistake in the new scanner can only
+# add refusals, never drop one that scanner made.
+READINGS = (("main", "all"), ("new", "all"), ("new", "pattern"), ("new", "none"))  # main first: its commands
+# come first in the union, so a cap on what is recorded (MAX_DIRS) never drops one of them
+READING = ("new", "all")
 
 
 def strip_heredocs(text):
@@ -205,7 +215,7 @@ def pieces(text):
                 cur.append(text[i + 1])
                 i += 1
             elif quote == '"' and scan and text.startswith(("$(", "${"), i):
-                j = scan_end(text, i + 2, [['"'], ["{"]] if text[i + 1] == "{" else [["sub", 0, 0]])
+                j = quoted_end(text, i)
                 if j is None:
                     scan = False
                 else:
@@ -253,13 +263,155 @@ REDIRECT_OP = re.compile(r"(\d*|&)(>>?|<)")
 REDIRECT = re.compile(r"^(\d*|&)(>>?|<)")
 
 
+def sub_frame():
+    # par: open parentheses; cases: `par` of each open `case`; mode: None in a command, "in" after `case` until its
+    # `in`, "pat" in a case pattern; fresh: no character of the pattern yet; pp: parentheses inside the pattern;
+    # op_at: index of the last `)` that ended a pattern or a subshell (a comment may follow it); cmd: the next word
+    # is in command position (where `case`, `esac` and `if`, `then`, ... are keywords).
+    return {"k": "sub", "par": 0, "cases": [], "mode": None, "fresh": False, "pp": 0, "op_at": -1, "cmd": True}
+
+
 def substitution_end(s, i):
     """Index just past the `)` that closes a `$(` whose body starts at i; None when it never closes."""
-    return scan_end(s, i, [["sub", 0, 0]])
+    if READING[0] == "main":
+        return scan_end_main(s, i, [["sub", 0, 0]])
+    return scan_end(s, i, [sub_frame()])
+
+
+def quoted_end(s, i):
+    """For a `$(` or `${` at i inside double quotes: index just past its close; None when it never closes."""
+    if READING[0] == "main":
+        return scan_end_main(s, i + 2, [['"'], ["{"]] if s[i + 1] == "{" else [["sub", 0, 0]])
+    return scan_end(s, i + 2, [{"k": '"'}, {"k": "{", "at": i + 2, "dq": True}] if s[i + 1] == "{" else [sub_frame()])
+
+
+def brace_quotes(s, top):
+    """Whether a `'` in the context `top` (code, or a `${ … }`) opens a quote under the reading READING."""
+    if top["k"] != "{" or not top["dq"] or READING[1] == "all":
+        return True
+    if READING[1] == "none":
+        return False
+    if "pat" not in top:
+        top["pat"] = bool(BRACE_OP.match(s, top["at"]))
+    return top["pat"]
 
 
 def scan_end(s, i, stack):
     """Index just past the character that closes the innermost context of `stack` (`)` for a substitution, `}` for
+    `${ … }`), scanning from i; None when it never closes (the caller then reads the text after it character by
+    character). A stack of contexts keeps nesting exact: code inside a substitution (its parenthesis count; `'…'`
+    and `$'…'` skipped whole; `#` comments to the line end; `case` patterns, where `)` and a leading `(` close
+    nothing), double-quoted text and `${ … }` (each `$(` in any of them opens a new substitution; backticks skipped
+    whole). Every step is linear: no backtracking regex, no rescans."""
+    floor, start = len(stack) - 1, i
+    while i < len(s):
+        c, top = s[i], stack[-1]
+        fresh = was_cmd = False
+        if top["k"] == "sub":
+            fresh, was_cmd = top["mode"] == "pat" and top["fresh"], top["cmd"]
+            if top["mode"] == "pat" and not c.isspace() and not (c == "#" and fresh and s[i - 1] in WORD_BEFORE):
+                top["fresh"] = False
+            if c in ";&|(\n":
+                top["cmd"] = True
+            elif c in "{!" and was_cmd and s[i + 1:i + 2] in ("", " ", "\t", "\n"):
+                pass  # `{` and `!` keep command position
+            elif not c.isspace():
+                top["cmd"] = False
+        if c == "\\":
+            i += 2
+            continue
+        if c == "`":
+            j = i + 1
+            while j < len(s) and s[j] != "`":
+                j += 2 if s[j] == "\\" else 1
+            if j >= len(s):
+                return None
+            i = j + 1
+            continue
+        if s.startswith("${", i):
+            stack.append({"k": "{", "at": i + 2, "dq": top["k"] == '"' or (top["k"] == "{" and top["dq"])})
+            i += 2
+            continue
+        if s.startswith("$(", i):
+            stack.append(sub_frame())
+            i += 2
+            continue
+        if top["k"] == '"':
+            if c == '"':
+                stack.pop()
+        elif (c == "'" or s.startswith("$'", i)) and brace_quotes(s, top):
+            j = ansi_end(s, i) if c == "$" else (s.find("'", i + 1) + 1 or None)
+            if j is None:
+                return None
+            i = j
+            continue
+        elif c == '"':
+            stack.append({"k": '"'})
+        elif top["k"] == "{":
+            if c == "}":
+                stack.pop()
+                if len(stack) == floor:
+                    return i + 1
+        elif c == "#" and (i == start or s[i - 1] in " \t\n;&|(" or i - 1 == top["op_at"]):
+            j = s.find("\n", i)
+            i = len(s) if j < 0 else j
+            continue
+        elif top["mode"] == "pat" and c in "()":
+            if c == "(" and fresh:
+                pass  # the optional `(` before a pattern
+            elif c == "(":
+                top["pp"] += 1
+            elif top["pp"]:
+                top["pp"] -= 1
+            else:
+                top["mode"], top["op_at"], top["cmd"] = None, i, True
+        elif c.isalpha() or c == "_":
+            m = WORD.match(s, i)
+            w = m.group() if m and (i == start or s[i - 1] in WORD_BEFORE) else ""
+            if top["mode"] == "pat":
+                if w == "esac" and fresh:
+                    top["mode"] = None
+                    top["cases"] = top["cases"][:-1]
+            elif top["mode"] == "in":
+                if w == "in":
+                    top["mode"], top["fresh"], top["pp"] = "pat", True, 0
+            elif was_cmd and w in KEEP_COMMAND:
+                top["cmd"] = True
+            elif was_cmd and w == "case":
+                top["cases"].append(top["par"])
+                top["mode"] = "in"
+            elif was_cmd and w == "esac" and top["cases"] and top["cases"][-1] == top["par"]:
+                top["cases"].pop()
+            i += len(w) if w else 1
+            while not w and i < len(s) and (s[i].isalnum() or s[i] == "_"):
+                i += 1
+            continue
+        elif (top["mode"] is None and top["cases"] and top["cases"][-1] == top["par"]
+              and s.startswith((";;&", ";;", ";&"), i)):
+            n = 3 if s.startswith(";;&", i) else 2
+            top["mode"], top["fresh"], top["pp"] = "pat", True, 0
+            i += n
+            continue
+        elif c == "(":
+            top["par"] += 1
+        elif c == ")":
+            if top["par"]:
+                top["par"] -= 1
+                top["op_at"] = i
+            else:
+                stack.pop()
+                if len(stack) == floor:
+                    return i + 1
+        i += 1
+    return None
+
+
+MAIN_CASE_WORD = re.compile(r"(case|esac)(?=[\s;&|)]|$)")
+MAIN_CASE_BEFORE = re.compile(r"(?:[;&|(\n]|\b(?:then|do|else|elif)|[!{])[ \t]*$")
+
+
+def scan_end_main(s, i, stack):
+    """main's scanner as of APS-70, kept unchanged as one reading (see READINGS). Index just past the character that closes the innermost context of `stack` (`)` for a substitution, `}` for
     `${ … }`), scanning from i; None when it never closes (the caller then reads the
     text after it character by character). A stack of contexts keeps nesting exact: code inside a
     substitution (its own parenthesis count, and its open `case` count so a pattern's `)` does not close it; `'…'` and
@@ -307,7 +459,7 @@ def scan_end(s, i, stack):
             j = s.find("\n", i)
             i = len(s) if j < 0 else j
             continue
-        elif c in "ce" and CASE_WORD.match(s, i) and CASE_BEFORE.search(s, max(start - 1, i - 64), i):
+        elif c in "ce" and MAIN_CASE_WORD.match(s, i) and MAIN_CASE_BEFORE.search(s, max(start - 1, i - 64), i):
             top[2] += 1 if c == "c" else -1 if top[2] else 0
             i += 4
             continue
@@ -405,6 +557,31 @@ TAKES_OPTIONS = ("time", "nohup", "env", "command", "exec", "sudo", "xargs", "ti
 def commands(text, cwd, keep_redirects=False):
     """(directory, words) for each simple command, following cd/pushd within its subshell; leading variable
     assignments and shell keywords (`then`, `do`, `{`, `time -p`, ...) dropped."""
+    global READING
+    text = text or ""
+    if "$(" not in text and "${" not in text:
+        return commands_read(text, cwd, keep_redirects)
+    out, seen = [], set()
+    try:
+        for READING in READINGS:
+            if READING[1] != "all" and "'" not in text:
+                continue
+            try:
+                found = commands_read(text, cwd, keep_redirects)
+            except Exception:
+                if READING[0] == "main":
+                    raise
+                continue  # a fault in a new reading never costs main's reading
+            for here, words in found:
+                if (here, tuple(words)) not in seen:
+                    seen.add((here, tuple(words)))
+                    out.append((here, words))
+    finally:
+        READING = ("new", "all")
+    return out
+
+
+def commands_read(text, cwd, keep_redirects=False):
     stack, here, out = [], cwd, []
     for p in pieces(text or ""):
         prev_kw = False
@@ -841,7 +1018,43 @@ def self_test():
                           ("a `b c", "a `b c"), ("a $((1+2)) c", "a $((1+2)) c"), ("'$(x)' $(y)", "'$(x)' $SUBST"),
                           ('a $(b "$(c ")")" d) e', "a $SUBST e"), ("a $'x\\'y' $(b) c", "a $'x\\'y' $SUBST c"),
                           ("a $(case x in x) b;; esac) c", "a $SUBST c"), ("a $(echo case b) c", "a $SUBST c"),
-                          ("a $(b `c )` d) e", "a $SUBST e"), ("a $(b ${x:-)} c) d", "a $SUBST d")):
+                          ("a $(b `c )` d) e", "a $SUBST e"), ("a $(b ${x:-)} c) d", "a $SUBST d"),
+                          ("a $(echo a#b) c", "a $SUBST c"), ("a $(echo $'x\\')') c", "a $SUBST c"),
+                          ('a $(echo "$(( "1" + 2 ))") c', "a $SUBST c"),
+                          ("a $(case x in x) case y in y) z;; esac;; esac) b", "a $SUBST b"),
+                          ("a $(case x in x) esac) b", "a $SUBST b"), ("a $(case x in y) ;; case) z;; esac) b", "a $SUBST b"),
+                          ("a $(case x in @(x|y)) z;; esac) b", "a $SUBST b"),
+                          ("a $(case x in\n # c (d)\n (x) z;; esac) b", "a $SUBST b"),
+                          ("a $(case x in x) y;& z) w;;& *) v;; esac) b", "a $SUBST b"),
+                          ("a $(echo case in x) b) c", "a $SUBST b) c"), ('a $(echo "$(( ")" ))") c', "a $SUBST c"),
+                          ("a $(case x in x) y;;& (z) w;; esac) b", "a $SUBST b"),
+                          ("a $(echo x; case y in y) z;; esac) b", "a $SUBST b"), ("a $(echo x;# )\n) b", "a $SUBST b"),
+                          ("a $(echo x&# )\n) b", "a $SUBST b"), ("a $( (# )\n echo) ) b", "a $SUBST b"),
+                          ("a $(case x in y|esac) z;; esac) b", "a $SUBST b"),
+                          ("a $(while case a in b) false;; esac; do :; done) c", "a $SUBST c"),
+                          ("a $(for ((i=0;;i++)); do :; done; echo x) b) c", "a $SUBST b) c"),
+                          ("a $(case=1; echo x) b) c", "a $SUBST b) c"), ("a $(case $x.in in (y) z;; esac) b", "a $SUBST b"),
+                          ("a $(case $in in (y) z;; esac) b", "a $SUBST b"), ("a $(case a-in in (y) z;; esac) b", "a $SUBST b"),
+                          ("a $(case x in x)# c) d\n e;; esac) b", "a $SUBST b"), ("a $( (b)# c)\n ) d", "a $SUBST d"),
+                          ("a $(echo $(b)#c) d) e", "a $SUBST d) e"),
+                          ("a $(case x in x) for ((;;)); do break; done;; esac) b", "a $SUBST b"),
+                          ("a $(case a in a) (case b in b) x; esac);; c) y;; esac) b", "a $SUBST b"),
+                          ("a $(echo if case in point) b", "a $SUBST b"), ("a $(x=1 case in y) b) c", "a $SUBST b) c"),
+                          ("a $(if case x in x) y;; esac; then :; fi) b", "a $SUBST b"),
+                          ("a $(until case x in x) y;; esac; do :; done) b", "a $SUBST b"),
+                          ("a $(while case x in y) z;; esac; do :; done) b", "a $SUBST b"),
+                          ("a $(time case x in x) y;; esac) b", "a $SUBST b"),
+                          ("a $(if :; then case x in x) y;; esac; fi) b", "a $SUBST b"),
+                          ("a $(if :; then :; else case x in x) y;; esac; fi) b", "a $SUBST b"),
+                          ("a $(if :; then :; elif case x in x) y;; esac; then :; fi) b", "a $SUBST b"),
+                          ("a $(for f in a; do case x in x) y;; esac; done) b", "a $SUBST b"),
+                          ("a $({ case x in x) y;; esac; }) b", "a $SUBST b"),
+                          ("a $(echo x\ncase y in y) z;; esac) b", "a $SUBST b"),
+                          ("a $(echo x | case y in y) z;; esac) b", "a $SUBST b"),
+                          ("a $(echo x & case y in y) z;; esac) b", "a $SUBST b"),
+                          ("a $(case x in x) echo esac;; y) z;; esac) b", "a $SUBST b"),
+                          ("a $(case a in a) (case b in b) x;; esac);; c) y;; esac) b", "a $SUBST b"),
+                          ("a $( ( (case x in x) y;; esac) ); for ((;;)); do break; done) b", "a $SUBST b"), ("a $(! case x in x) y;; esac) b", "a $SUBST b"), ("a $(case1 x) b) c", "a $SUBST b) c")):
             if blank_substitutions(raw) != want:
                 problems.append(f"blank_substitutions({raw!r}) = {blank_substitutions(raw)!r}, expected {want!r}")
         for raw, want in (("x=$'it\\'s' ; y", ["x=$'it\\'s' ", " y"]), ('a "${x:-\')\'}" ; b', ['a "${x:-\')\'}" ', " b"]),
@@ -849,6 +1062,50 @@ def self_test():
                           ("a $(b ; c ; d", ["a $(b ", " c ", " d"]), ('a "$(b ; c', ['a "$(b ; c'])):
             if pieces(raw) != want:
                 problems.append(f"pieces({raw!r}) = {pieces(raw)!r}, expected {want!r}")
+        global READING
+        for reading, raw, want in ((("new", "pattern"), "a \"${x#'}\" ; b'}\" ; c", ["a \"${x#'}\" ; b'}\" ", " c"]),
+                                   (("new", "pattern"), "a \"${x%%'}\" ; b'}\" ; c", ["a \"${x%%'}\" ; b'}\" ", " c"]),
+                                   (("new", "none"), "a $(echo ${x:-'}'}) ; b", ["a $(echo ${x:-'}'}) ", " b"]),
+                                   (("new", "pattern"), "a \"${x:-'}\" ; b", ["a \"${x:-'}\" ", " b"]),
+                                   (("new", "none"), "a \"${x#'}\" ; b", ["a \"${x#'}\" ", " b"]),
+                                   (("new", "all"), "a \"${x:-'}'}\" ; b", ["a \"${x:-'}'}\" ", " b"]),
+                                   (("new", "pattern"), "a \"${x:-${y#'}'}}\" ; b", ["a \"${x:-${y#'}'}}\" ", " b"]),
+                                   (("main", "all"), "a $(case x in x) b;; esac) ; c", ["a $(case x in x) b;; esac) ", " c"]),
+                                   (("main", "all"), 'a "$( (echo a)# x)\n echo "y ; z" )" ; c',
+                                    ['a "$( (echo a)# x)\n echo "y ', ' z" )" ', " c"]),  # main's reading, kept as it was
+                                   (("new", "all"), 'a "$( (echo a)# x)\n echo "y ; z" )" ; c',
+                                    ['a "$( (echo a)# x)\n echo "y ; z" )" ', " c"])):
+            try:
+                READING = reading
+                got = pieces(raw)
+            finally:
+                READING = ("new", "all")
+            if got != want:
+                problems.append(f"pieces({raw!r}) under {reading} = {got!r}, expected {want!r}")
+        commands("echo \"${x:-'}'}\"", "/")
+        if READINGS[0] != ("main", "all"):
+            problems.append("READINGS: main's reading must run first (a recording cap must never drop its commands)")
+        real_scan_end, real_main = scan_end, scan_end_main
+        def broken(*a):
+            raise ValueError("fault")
+        globals()["scan_end"] = broken
+        try:
+            if not commands("git push origin $(echo x) main", "/"):
+                problems.append("commands: a fault in the new reading dropped main's reading")
+        except ValueError:
+            problems.append("commands: a fault in the new reading escaped")
+        finally:
+            globals()["scan_end"] = real_scan_end
+        globals()["scan_end_main"] = broken
+        try:
+            commands("git push origin $(echo x) main", "/")
+            problems.append("commands: a fault in main's reading was swallowed")
+        except ValueError:
+            pass
+        finally:
+            globals()["scan_end_main"] = real_main
+        if READING != ("new", "all"):
+            problems.append(f"commands: READING left as {READING!r}")
         scans, real_scan = [], scan_end
         globals()["scan_end"] = lambda *a: scans.append(1) or real_scan(*a)
         try:
@@ -915,7 +1172,27 @@ def self_test():
                  ("$'a\\'b' \"$(echo x)\" | git checkout -b wip", True), ("x=$'it\\'s' ; git push origin main", True),
                  ("echo $(case a in a) echo x;; esac) ; git push origin main", True),
                  ("echo $(case a in\na) echo x;;\nesac) ; git push origin main", True),
-                 ("echo $(echo case a) ; git push origin main", True), ('git push "${x:-")"}" :main', True),
+                 ("echo $(echo case a) ; git push origin main", True), ("msg=\"${1:-don't know}\"; git push origin main; echo 'ok}'", True),
+                 ("echo \"${x:-'}\"'}\" ; git push origin main", True),
+                 ("echo $(case a in a) case b in b) x;; esac;; esac) ; git push origin main", True),
+                 ("x=$(case $y in\n" + "#" * 200 + "\na) echo 1;;\nesac); git push origin main", True),
+                 ("git push origin $(for ((i=0;;i++)); do break; done; echo x) main", True),
+                 ("git push $(case a in a)# x) y\n echo o;; esac) main", True),
+                 ("echo $( (echo a)# don't\n ); git push origin main; echo 'ok' ')'", True),
+                 ("git push origin $(case=1; for f in b; do :; done) :main", True),
+                 ("git push origin $(case $x.in in (a) echo b;; esac) :main", True),
+                 ('n=$(for ((i=0;;i++)); do break; done); echo "$(echo "x; git checkout -b wip")"', False),
+                 ('n=$(case=1; for f in a; do :; done); echo "$(echo "x; git checkout -b wip")"', False),
+                 ('n=$(case $1.in in (a) echo b;; esac); echo "$(echo "x; git checkout -b wip")"', False),
+                 ("msg=\"${1:-${2:-don't know}}\"; git push origin main; echo 'ok}}\"'", True),
+                 ("echo \"${x%'}\"; echo '}\" \"${y:-'}\"; git push origin main; echo '}\"'", True),
+                 ("x=$(if case a in a) true;; esac; then echo; fi); git push origin main", True),
+                 ("msg=\"${1%don't}\"; git push origin main; echo 'x}'", True),
+                 ("git push origin $(case a in a) (case b in b) x; esac);; c) y;; esac) main", True),
+                 ("git push origin $(echo if case in point) main", True),
+                 ("git push origin $(echo do case in point) main", True),  # only the new reading finds this one
+                 ("echo $(echo then case in x) git checkout -b wip)", True),  # main's reading still applies
+                 ('n=$(echo if case in point); echo "$(echo "x; git checkout -b wip")"', False), ('git push "${x:-")"}" :main', True),
                  ('git push $(echo "${x:-$(echo a\n)}") "${x:-")"}" :main', True), ('echo "${x:-"}"}" ; git push origin main', True), ('echo "$((echo ")"))" ; git push origin main', True),
                  ("git checkout -b \"x-$(echo ')' -C y)\" main", False), ("git push origin `echo x main", True), ("sudo -u root git checkout -b wip", True),
                  ("env -u X git checkout -b wip", True), ("echo 'a << EOF'\ngit checkout -b wip", True),
