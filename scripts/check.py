@@ -133,6 +133,9 @@ for script in ("loop.py", "loop-stop.py"):
     run = subprocess.run([sys.executable, str(ROOT / "loop" / script), "--self-test"], capture_output=True, text=True, timeout=600)
     if run.returncode != 0:
         fail(f"loop/{script} --self-test failed:\n" + (run.stdout + run.stderr).strip())
+graph = subprocess.run([sys.executable, str(ROOT / "graph" / "graph-hook.py"), "--self-test"], capture_output=True, text=True, timeout=600)
+if graph.returncode != 0:
+    fail("graph/graph-hook.py --self-test failed:\n" + (graph.stdout + graph.stderr).strip())
 plane = subprocess.run([sys.executable, str(ROOT / "scripts" / "plane.py"), "--self-test"], capture_output=True, text=True)
 if plane.returncode != 0:
     fail("scripts/plane.py --self-test failed:\n" + (plane.stdout + plane.stderr).strip())
@@ -360,12 +363,15 @@ with tempfile.TemporaryDirectory() as home:
     hooks = json.loads((claude / "settings.json").read_text(encoding="utf-8")).get("hooks", {})
     commands = {event: [h.get("command") for e in hooks.get(event, []) for h in e.get("hooks", [])] for event in hooks}
     want = {"PreToolUse": ['python3 "$HOME/.claude/hooks/owner-token-guard/owner-token-guard.py"'],
-            "SessionStart": ["other-tool session-start", 'python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" session-start || true'],
+            "SessionStart": ["other-tool session-start", 'python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" session-start || true',
+                             'python3 "$HOME/.claude/hooks/graph/graph-hook.py" session-start || true'],
+            "SessionEnd": ['python3 "$HOME/.claude/hooks/graph/graph-hook.py" session-end || true'],
             "PreCompact": ['python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" pre-compact || true'],
             "Stop": ['python3 "$HOME/.claude/hooks/loop/loop-stop.py" || true']}
     if [r.returncode for r in runs] != [0, 0, 0] or commands != want or "installed  " + str(claude / "settings.json") in runs[1].stdout \
             or not (claude / "hooks" / "saveit" / "saveit-hook.py").is_file() \
-            or not (claude / "hooks" / "loop" / "loop-stop.py").is_file():
+            or not (claude / "hooks" / "loop" / "loop-stop.py").is_file() \
+            or not (claude / "hooks" / "graph" / "graph-hook.py").is_file():
         fail(f"install.py --settings session hooks: expected {want} registered once, the second run unchanged and --check clean; "
              f"got exits {[r.returncode for r in runs]}, {commands}")
 
