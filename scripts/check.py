@@ -353,22 +353,28 @@ with tempfile.TemporaryDirectory() as home:
     claude = Path(home) / ".claude"
     claude.mkdir()
     other = {"hooks": [{"type": "command", "command": "other-tool session-start"}]}
-    (claude / "settings.json").write_text(json.dumps({"model": "claude-opus-5-5", "hooks": {"SessionStart": [other]}}), encoding="utf-8")
+    # the loop's Stop hook as an earlier install registered it (timeout 60): --settings brings it to this repo's
+    old_stop = {"hooks": [{"type": "command", "command": 'python3 "$HOME/.claude/hooks/loop/loop-stop.py" || true', "timeout": 60}]}
+    (claude / "settings.json").write_text(json.dumps({"model": "claude-opus-5-5", "hooks": {"SessionStart": [other], "Stop": [old_stop]}}), encoding="utf-8")
     before = subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), "--check"], env=env,
                             capture_output=True, text=True, timeout=120)
-    if before.returncode != 1 or "save-it PreCompact hook not registered" not in before.stdout:
+    if before.returncode != 1 or "save-it PreCompact hook not registered" not in before.stdout \
+            or "one-prompt loop Stop hook: timeout 60" not in before.stdout:
         fail(f"install.py --check without the session hooks: expected exit 1 naming them; got exit {before.returncode}")
     runs = [subprocess.run([sys.executable, str(ROOT / "scripts" / "install.py"), *args], env=env,
                            capture_output=True, text=True, timeout=120) for args in (["--settings"], ["--settings"], ["--check"])]
     hooks = json.loads((claude / "settings.json").read_text(encoding="utf-8")).get("hooks", {})
     commands = {event: [h.get("command") for e in hooks.get(event, []) for h in e.get("hooks", [])] for event in hooks}
+    stop_timeouts = [h.get("timeout") for e in hooks.get("Stop", []) for h in e.get("hooks", [])]
     want = {"PreToolUse": ['python3 "$HOME/.claude/hooks/owner-token-guard/owner-token-guard.py"'],
             "SessionStart": ["other-tool session-start", 'python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" session-start || true',
                              'python3 "$HOME/.claude/hooks/graph/graph-hook.py" session-start || true'],
             "SessionEnd": ['python3 "$HOME/.claude/hooks/graph/graph-hook.py" session-end || true'],
             "PreCompact": ['python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" pre-compact || true'],
-            "Stop": ['python3 "$HOME/.claude/hooks/loop/loop-stop.py" || true']}
+            "Stop": ['python3 "$HOME/.claude/hooks/loop/loop-stop.py" || true'],
+            "SubagentStop": ['python3 "$HOME/.claude/hooks/loop/loop-stop.py" subagent-stop || true']}
     if [r.returncode for r in runs] != [0, 0, 0] or commands != want or "installed  " + str(claude / "settings.json") in runs[1].stdout \
+            or stop_timeouts != [1800] \
             or not (claude / "hooks" / "saveit" / "saveit-hook.py").is_file() \
             or not (claude / "hooks" / "loop" / "loop-stop.py").is_file() \
             or not (claude / "hooks" / "graph" / "graph-hook.py").is_file():

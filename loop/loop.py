@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """The one-prompt loop's run file: start a run on a plan, record review verdicts, close or reopen it.
 
-  python3 loop.py start <plan.md> [--base <ref>]   open a run for this session on that plan (in its git work tree)
-  python3 loop.py pass <task>                      record a review PASS for a task (T1, T2, …)
+  python3 loop.py start <plan.md> [--base <ref>] [--hours <n>]
+                                                   open a run for this session on that plan (in its git work tree);
+                                                   it closes itself after <n> hours (default 12)
+  python3 loop.py pass <task>                      record a review PASS for a task (T1, T2, …); refused unless the
+                                                   last reviewer verdict the SubagentStop hook recorded is PASS
   python3 loop.py fail <task> "<reason>"           record a review FAIL; the second FAIL of one task closes the run
   python3 loop.py ask "<question>"                 close the run for a question only the owner can answer
   python3 loop.py stop [reason]                    close the run for any other reason
-  python3 loop.py resume                           reopen a run closed by ask, stop, the idle breaker or the limit
+  python3 loop.py resume                           reopen a run closed by ask, stop, the idle breaker, a limit or
+                                                   three failing check rounds (a new time limit, counters at zero)
   python3 loop.py status                           print the run
   python3 loop.py --self-test                      exit 0 = PASS
 
@@ -14,8 +18,12 @@ The run file is `<git dir>/1prompt-run.json` of the work tree `start` runs in (t
 committed), and `~/.claude/1prompt-runs/<session id>` points the Stop hook and the other commands at it, wherever the
 shell is. The plan needs `## Tasks` and `## Proof`; the base must not be the branch being worked on. A review FAIL
 keeps the run open until a later PASS of that task. While a run is open,
-the Stop hook (loop-stop.py) keeps this session going until `sdlc-check.py converge` finds no gap in the plan and no
-proof result is a FAIL; the session then stops with "done". The run is bound to the session that started it
+the Stop hook (loop-stop.py) keeps this session going until `sdlc-check.py converge --checks` finds no gap in the plan,
+its checks pass and no proof result is a FAIL; the session then stops with "done". A review verdict is evidence, not
+the session's word: the SubagentStop hook records what each run of a reviewer agent (a type ending in `reviewer`) of
+this session returned, and `pass` needs the last one to be PASS (`fail` needs nothing: it only makes the run
+stricter, and every reviewer FAIL on record must have one). The verdicts are not tied to a task and the run file is
+a plain file: a guard against haste, not against a session that sets out to cheat. The run is bound to the session that started it
 (CLAUDE_CODE_SESSION_ID), so other sessions in the same tree are not held. A run closed by two fails or by "done"
 is not reopened: start a new one. Exit 0 done, 1 refused by the run's state, 2 usage or not a git work tree.
 Standard library only.
@@ -26,13 +34,14 @@ import re
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 RUN_FILE = "1prompt-run.json"
 POINTERS = Path.home() / ".claude" / "1prompt-runs"  # <session id> -> run file path; the Stop hook reads it
 JUDGE = Path(__file__).resolve().parent.parent / "scripts" / "sdlc-check.py"
-REOPENABLE = ("ask", "stop", "idle", "limit")
+REOPENABLE = ("ask", "stop", "idle", "limit", "checks")
+DEFAULT_HOURS = 12
 
 
 class Stop(Exception):
@@ -41,8 +50,8 @@ class Stop(Exception):
         self.code = code
 
 
-def now():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+def now(hours=0):
+    return (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%MZ")
 
 
 def git(cwd, *args):
@@ -96,7 +105,13 @@ def close(run, kind, reason):
 
 def describe(run):
     lines = [f"run: {run.get('state')}" + (f" ({run.get('closed_by')}: {run.get('reason')})" if run.get("state") == "closed" else ""),
-             f"plan: {run.get('plan')}", f"base: {run.get('base')}", f"started: {run.get('started')}"]
+             f"plan: {run.get('plan')}", f"base: {run.get('base')}", f"started: {run.get('started')}",
+             f"time limit: {run.get('deadline', 'none')}"]
+    reviews = run.get("reviews") or []
+    if reviews:
+        lines.append("reviewer verdicts on record: " + ", ".join(f"{r.get('agent')} {r.get('verdict')}" for r in reviews[-5:]))
+    if run.get("check_fails"):
+        lines.append(f"failing check rounds: {run['check_fails']} of 3")
     for task, reasons in sorted((run.get("fails") or {}).items()):
         lines.append(f"{task}: {len(reasons)} FAIL(s): " + " | ".join(reasons))
     if run.get("passes"):
@@ -125,11 +140,21 @@ def main(argv):
         return 0 if argv else 2
     command, rest = argv[0], argv[1:]
     if command == "start":
-        base = None
-        if len(rest) == 3 and rest[1] == "--base":
-            base = rest[2]
-        elif len(rest) != 1:
-            raise Stop(2, "usage: start <plan.md> [--base <ref>]")
+        base, hours, options = None, DEFAULT_HOURS, rest[1:]
+        if not rest or rest[0].startswith("--") or len(options) % 2:
+            raise Stop(2, "usage: start <plan.md> [--base <ref>] [--hours <n>]")
+        for name, value in zip(options[::2], options[1::2]):
+            if name == "--base" and base is None:
+                base = value
+            elif name == "--hours":
+                try:
+                    hours = float(value)
+                except ValueError:
+                    hours = 0
+                if not 0 < hours <= 168:
+                    raise Stop(2, f"--hours needs a number of hours up to 168, not {value!r}")
+            else:
+                raise Stop(2, "usage: start <plan.md> [--base <ref>] [--hours <n>]")
         plan = Path(rest[0]).resolve()
         if not plan.is_file():
             raise Stop(2, f"no plan at {plan}")
@@ -170,12 +195,13 @@ def main(argv):
         if not JUDGE.is_file():
             raise Stop(2, f"the judge {JUDGE} is missing")
         run = {"version": 1, "state": "running", "run_id": os.urandom(8).hex(), "plan": str(plan), "base": base, "session": session, "top": str(top),
-               "judge": str(JUDGE), "started": now(), "fails": {}, "passes": [], "open_fails": [], "idle": 0,
-               "blocks": 0, "fingerprint": None}
+               "judge": str(JUDGE), "started": now(), "hours": hours, "deadline": now(hours), "fails": {}, "passes": [],
+               "open_fails": [], "reviews": [], "check_fails": 0, "idle": 0, "blocks": 0, "fingerprint": None}
         save(path, run)
         POINTERS.mkdir(parents=True, exist_ok=True)
         (POINTERS / session).write_text(str(path), encoding="utf-8")
-        print(f"run open on {plan.name} (base {base}); the Stop hook holds this session until the plan converges")
+        print(f"run open on {plan.name} (base {base}, until {run['deadline']}); the Stop hook holds this session until the "
+              "plan converges and its checks pass")
         return 0
     path = run_path()
     run = load(path)
@@ -187,8 +213,9 @@ def main(argv):
             raise Stop(1, "the run is already open")
         if run.get("closed_by") not in REOPENABLE:
             raise Stop(1, f"a run closed by {run.get('closed_by')} is not reopened; start a new one")
-        run.update(state="running", idle=0, blocks=0, fingerprint=None)
-        for key in ("closed_by", "reason", "closed_at"):
+        hours = run.get("hours") if isinstance(run.get("hours"), (int, float)) and run.get("hours") > 0 else DEFAULT_HOURS
+        run.update(state="running", idle=0, blocks=0, waits=0, check_fails=0, fingerprint=None, deadline=now(hours))
+        for key in ("closed_by", "reason", "closed_at", "notified"):
             run.pop(key, None)
         save(path, run)
         print("run reopened")
@@ -199,6 +226,13 @@ def main(argv):
         if len(rest) != 1:
             raise Stop(2, "usage: pass <task>")
         task = task_id(rest[0], run)
+        reviews = [r for r in run.get("reviews") or [] if isinstance(r, dict)]
+        last = reviews[-1].get("verdict") if reviews else None
+        if last != "PASS":
+            raise Stop(1, f"{task}: no reviewer PASS on record (the last reviewer verdict: {last or 'none'}). A PASS comes "
+                          "from a reviewer agent's run in this session (`reviewer`, `hard-reviewer`); the SubagentStop hook records it. "
+                          "If a reviewer did return PASS, that hook is not loaded here: run `install.py --settings`, "
+                          "then `loop.py ask` and tell the owner.")
         run["passes"] = sorted(set(run.get("passes") or []) | {task})
         run["open_fails"] = sorted(set(run.get("open_fails") or []) - {task})
         save(path, run)
@@ -290,7 +324,24 @@ def self_test():
             failures.append(f"start wrote {s}")
         expect("second start while running", call("start", str(plan)), 1, "already open")
         expect("bad task id", call("pass", "X1"), 2, "not a task id")
+        def reviewed(*verdicts):  # what the SubagentStop hook writes when a reviewer run ends
+            s = state()
+            s["reviews"] = (s.get("reviews") or []) + [{"agent": "reviewer", "verdict": v, "at": "t"} for v in verdicts]
+            runfile.write_text(json.dumps(s), encoding="utf-8")
+
+        s = state()
+        if not s.get("deadline") or s.get("hours") != DEFAULT_HOURS or s.get("deadline") <= s.get("started"):
+            failures.append(f"start wrote no time limit: {s.get('hours')} {s.get('deadline')}")
+        expect("pass with no reviewer verdict on record", call("pass", "t2"), 1, "no reviewer PASS on record")
+        reviewed("PASS", "FAIL")
+        expect("pass after a reviewer FAIL", call("pass", "t2"), 1, "the last reviewer verdict: FAIL")
+        reviewed("none")
+        expect("pass after a verdict that was neither", call("pass", "t2"), 1, "the last reviewer verdict: none")
+        if state().get("passes"):
+            failures.append("a refused pass was recorded")
+        reviewed("PASS")
         expect("pass", call("pass", "t2"), 0, "T2: PASS")
+        expect("status shows the verdicts", call("status"), 0, "reviewer verdicts on record")
         expect("fail 1", call("fail", "T1", "test missing"), 0, "FAIL 1 of 2")
         if state().get("open_fails") != ["T1"]:
             failures.append(f"open_fails after a FAIL: {state().get('open_fails')}")
@@ -307,13 +358,23 @@ def self_test():
         expect("pass after close", call("pass", "T1"), 1, "closed")
         expect("resume after two fails", call("resume"), 1, "not reopened")
         expect("status", call("status"), 0, "T1: 2 FAIL(s)")
-        expect("new start after a closed run", call("start", str(plan), "--base", "main"), 0, "base main")
+        for bad in (("--hours", "0"), ("--hours", "x"), ("--hours", "500"), ("--hours",), ("--frob", "1"), ("--base", "main", "--base", "main")):
+            expect(f"start {' '.join(bad)}", call("start", str(plan), *bad), 2)
+        expect("new start after a closed run", call("start", str(plan), "--hours", "0.5", "--base", "main"), 0, "base main")
+        if state().get("hours") != 0.5 or state().get("reviews") != []:
+            failures.append(f"a new run did not start with its own limit and no verdicts: {state()}")
         expect("ask", call("ask", "which licence?"), 0, "needs the owner")
         expect("resume after ask", call("resume"), 0, "reopened")
         expect("resume while running", call("resume"), 1, "already open")
         expect("stop", call("stop", "owner said so"), 0, "owner said so")
         expect("resume after stop", call("resume"), 0, "reopened")
         s = state()
+        s.update(state="closed", closed_by="checks", reason="checks failed 3 rounds", check_fails=3, waits=10, deadline="2000-01-01T00:00Z", notified=True)
+        runfile.write_text(json.dumps(s), encoding="utf-8")
+        expect("resume after three failing check rounds", call("resume"), 0, "reopened")
+        s = state()
+        if s.get("check_fails") != 0 or s.get("waits") != 0 or s.get("deadline", "") < s.get("started", "x") or "notified" in s:
+            failures.append(f"resume did not reset the check rounds, the time limit and the notice: {s}")
         s.update(state="closed", closed_by="done", reason="goal done")
         runfile.write_text(json.dumps(s), encoding="utf-8")
         expect("resume after done", call("resume"), 1, "not reopened")
