@@ -1,1 +1,1 @@
-{"pattern": "(feat|fix)/[a-z0-9][a-z0-9.-]*", "example": "feat/sync-internal-96badc0"}
+{"pattern": "(feat|fix)/[a-z0-9][a-z0-9.-]*", "example": "feat/sync-internal-96badc0", "no_push": ["main", "master"]}
