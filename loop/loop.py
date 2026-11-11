@@ -4,12 +4,14 @@
   python3 loop.py start <plan.md> [--base <ref>] [--hours <n>]
                                                    open a run for this session on that plan (in its git work tree);
                                                    it closes itself after <n> hours (default 12)
-  python3 loop.py pass <task>                      record a review PASS for a task (T1, T2, …); refused unless the
-                                                   last reviewer verdict the SubagentStop hook recorded is PASS
+  python3 loop.py pass <task>                      record a review PASS for a task (T1, T2, …); refused unless that
+                                                   task's last reviewer verdict the SubagentStop hook recorded (from a
+                                                   reviewer prompt line `loop task: T<n>`) is PASS
   python3 loop.py fail <task> "<reason>"           record a review FAIL; the second FAIL of one task closes the run
   python3 loop.py ask "<question>"                 close the run for a question only the owner can answer
   python3 loop.py stop [reason]                    close the run for any other reason
-  python3 loop.py resume                           reopen a run closed by ask, stop, the idle breaker, a limit or
+  python3 loop.py resume                           (in the session that will hold it) reopen a run closed by ask, stop,
+                                                   the idle breaker, a limit (loop-wake.py's caps too) or
                                                    three failing check rounds (a new time limit, counters at zero)
   python3 loop.py status                           print the run
   python3 loop.py --self-test                      exit 0 = PASS
@@ -21,9 +23,9 @@ keeps the run open until a later PASS of that task. While a run is open,
 the Stop hook (loop-stop.py) keeps this session going until `sdlc-check.py converge --checks` finds no gap in the plan,
 its checks pass and no proof result is a FAIL; the session then stops with "done". A review verdict is evidence, not
 the session's word: the SubagentStop hook records what each run of a reviewer agent (a type ending in `reviewer`) of
-this session returned, and `pass` needs the last one to be PASS (`fail` needs nothing: it only makes the run
-stricter, and every reviewer FAIL on record must have one). The verdicts are not tied to a task and the run file is
-a plain file: a guard against haste, not against a session that sets out to cheat. The run is bound to the session that started it
+this session returned for the task its prompt names (`loop task: T<n>`), and `pass <task>` needs that task's last one
+to be PASS (`fail` needs nothing: it only makes the run stricter, and every reviewer FAIL of a task must have one). A
+verdict that names no task counts for nothing. The run file is a plain file: a guard against haste, not against a session that sets out to cheat. The run is bound to the session that started it
 (CLAUDE_CODE_SESSION_ID), so other sessions in the same tree are not held. A run closed by two fails or by "done"
 is not reopened: start a new one. Exit 0 done, 1 refused by the run's state, 2 usage or not a git work tree.
 Standard library only.
@@ -109,7 +111,8 @@ def describe(run):
              f"time limit: {run.get('deadline', 'none')}"]
     reviews = run.get("reviews") or []
     if reviews:
-        lines.append("reviewer verdicts on record: " + ", ".join(f"{r.get('agent')} {r.get('verdict')}" for r in reviews[-5:]))
+        lines.append("reviewer verdicts on record: " + ", ".join(
+            f"{r.get('agent')} {r.get('verdict')} ({r.get('task') or 'no task: not counted'})" for r in reviews[-5:]))
     if run.get("check_fails"):
         lines.append(f"failing check rounds: {run['check_fails']} of 3")
     for task, reasons in sorted((run.get("fails") or {}).items()):
@@ -214,11 +217,22 @@ def main(argv):
         if run.get("closed_by") not in REOPENABLE:
             raise Stop(1, f"a run closed by {run.get('closed_by')} is not reopened; start a new one")
         hours = run.get("hours") if isinstance(run.get("hours"), (int, float)) and run.get("hours") > 0 else DEFAULT_HOURS
-        run.update(state="running", idle=0, blocks=0, waits=0, check_fails=0, fingerprint=None, deadline=now(hours))
-        for key in ("closed_by", "reason", "closed_at", "notified"):
+        run.update(state="running", idle=0, blocks=0, waits=0, check_fails=0, wakes=0, fingerprint=None, deadline=now(hours))
+        for key in ("closed_by", "reason", "closed_at", "notified", "next_wake", "wake_noted"):
             run.pop(key, None)
+        me, before = session_id(), run.get("session")
+        if me and me != before:  # the session that resumes holds the run from now on (loop-wake may have bound a fork)
+            run["session"] = me
         save(path, run)
-        print("run reopened")
+        if me and me != before:
+            POINTERS.mkdir(parents=True, exist_ok=True)
+            (POINTERS / me).write_text(str(path), encoding="utf-8")
+            if isinstance(before, str) and before and "/" not in before and not before.startswith("."):
+                try:
+                    (POINTERS / before).unlink()
+                except OSError:
+                    pass
+        print("run reopened" + (f", now held by this session ({me[:8]})" if me and me != before else ""))
         return 0
     if run.get("state") != "running":
         raise Stop(1, f"the run is closed ({run.get('closed_by')}: {run.get('reason')})")
@@ -226,11 +240,12 @@ def main(argv):
         if len(rest) != 1:
             raise Stop(2, "usage: pass <task>")
         task = task_id(rest[0], run)
-        reviews = [r for r in run.get("reviews") or [] if isinstance(r, dict)]
+        reviews = [r for r in run.get("reviews") or [] if isinstance(r, dict) and r.get("task") == task]
         last = reviews[-1].get("verdict") if reviews else None
         if last != "PASS":
-            raise Stop(1, f"{task}: no reviewer PASS on record (the last reviewer verdict: {last or 'none'}). A PASS comes "
-                          "from a reviewer agent's run in this session (`reviewer`, `hard-reviewer`); the SubagentStop hook records it. "
+            raise Stop(1, f"{task}: no reviewer PASS on record for it (its last reviewer verdict: {last or 'none'}). A PASS "
+                          "comes from a reviewer agent's run in this session (`reviewer`, `hard-reviewer`) whose prompt "
+                          f"names the task as `loop task: {task}`; the SubagentStop hook records it. "
                           "If a reviewer did return PASS, that hook is not loaded here: run `install.py --settings`, "
                           "then `loop.py ask` and tell the owner.")
         run["passes"] = sorted(set(run.get("passes") or []) | {task})
@@ -324,9 +339,10 @@ def self_test():
             failures.append(f"start wrote {s}")
         expect("second start while running", call("start", str(plan)), 1, "already open")
         expect("bad task id", call("pass", "X1"), 2, "not a task id")
-        def reviewed(*verdicts):  # what the SubagentStop hook writes when a reviewer run ends
+        def reviewed(*verdicts, task="T2"):  # what the SubagentStop hook writes when a reviewer run of a task ends
             s = state()
-            s["reviews"] = (s.get("reviews") or []) + [{"agent": "reviewer", "verdict": v, "at": "t"} for v in verdicts]
+            s["reviews"] = (s.get("reviews") or []) + [{"agent": "reviewer", "verdict": v, "at": "t", "task": task}
+                                                       for v in verdicts]
             runfile.write_text(json.dumps(s), encoding="utf-8")
 
         s = state()
@@ -334,11 +350,15 @@ def self_test():
             failures.append(f"start wrote no time limit: {s.get('hours')} {s.get('deadline')}")
         expect("pass with no reviewer verdict on record", call("pass", "t2"), 1, "no reviewer PASS on record")
         reviewed("PASS", "FAIL")
-        expect("pass after a reviewer FAIL", call("pass", "t2"), 1, "the last reviewer verdict: FAIL")
+        expect("pass after a reviewer FAIL", call("pass", "t2"), 1, "its last reviewer verdict: FAIL")
         reviewed("none")
-        expect("pass after a verdict that was neither", call("pass", "t2"), 1, "the last reviewer verdict: none")
+        expect("pass after a verdict that was neither", call("pass", "t2"), 1, "its last reviewer verdict: none")
         if state().get("passes"):
             failures.append("a refused pass was recorded")
+        reviewed("PASS", task=None)
+        expect("pass after a PASS that named no task", call("pass", "t2"), 1, "no reviewer PASS on record for it")
+        reviewed("PASS", task="T1")
+        expect("pass after a PASS for another task", call("pass", "t2"), 1, "no reviewer PASS on record for it")
         reviewed("PASS")
         expect("pass", call("pass", "t2"), 0, "T2: PASS")
         expect("status shows the verdicts", call("status"), 0, "reviewer verdicts on record")
@@ -375,6 +395,17 @@ def self_test():
         s = state()
         if s.get("check_fails") != 0 or s.get("waits") != 0 or s.get("deadline", "") < s.get("started", "x") or "notified" in s:
             failures.append(f"resume did not reset the check rounds, the time limit and the notice: {s}")
+        # closed by loop-wake's caps while bound to a fork: resumed from the owner's session, it is held by that session
+        s.update(state="closed", closed_by="limit", reason="its session stopped again after 4 wakes", wakes=4,
+                 next_wake="2999-01-01T00:00Z", wake_noted=True, session="fork-4")
+        runfile.write_text(json.dumps(s), encoding="utf-8")
+        (Path(tmp) / ".claude" / "1prompt-runs" / "fork-4").write_text(str(runfile), encoding="utf-8")
+        expect("resume after the wake cap", call("resume"), 0, "now held by this session")
+        s = state()
+        if s.get("wakes") != 0 or "next_wake" in s or "wake_noted" in s or s.get("session") != "sess-1" \
+                or (Path(tmp) / ".claude" / "1prompt-runs" / "fork-4").exists() \
+                or (Path(tmp) / ".claude" / "1prompt-runs" / "sess-1").read_text() != str(runfile):
+            failures.append(f"resume did not reset the wakes or bind the resuming session: {s}")
         s.update(state="closed", closed_by="done", reason="goal done")
         runfile.write_text(json.dumps(s), encoding="utf-8")
         expect("resume after done", call("resume"), 1, "not reopened")

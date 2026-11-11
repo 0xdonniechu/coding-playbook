@@ -40,7 +40,7 @@ failures = []
 # the script self-tests (same code, already run by the outer run) are skipped and the file and consistency checks run.
 SELF_TESTS = [("scripts/switch-model.py", False, None), ("scripts/sdlc-check.py", False, None), ("loop/loop-stop.py", False, 600),
               ("graph/graph-hook.py", False, 600), ("scripts/plane.py", False, None), ("hooks/agent-guard.py", True, None),
-              ("scripts/dispatch.py", False, None), ("loop/loop.py", False, 600), ("saveit/saveit-hook.py", False, None),
+              ("scripts/dispatch.py", False, None), ("loop/loop.py", False, 600), ("loop/loop-wake.py", False, 600), ("saveit/saveit-hook.py", False, None),
               ("scripts/progress-diagram.py", False, None), ("scripts/github-boundary.py", True, None),
               ("guard/owner-token-guard.py", True, None), ("scripts/switch-test.py", False, None)]
 IN_SWITCH_COPY = bool(os.environ.get("SWITCH_MODEL_SELF_TEST"))
