@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Session gates for rules that slipped as plain text (APS-66). Hooks for every session:
+"""Session gates for rules that slipped as plain text (APS-66, APS-67). Hooks for every session:
 
   PreToolUse (Bash|Edit|Write|MultiEdit|NotebookEdit|Read|Grep|Glob):  session-gates.py pre-tool
   SubagentStop:                                                        session-gates.py subagent-stop
@@ -12,17 +12,23 @@ Three gates, all for the main session (a call that carries `agent_id` comes from
    branch the main session creates, renames to or pushes with another name: `git checkout -b/-B/--orphan/--track`,
    `git switch -c/-C`, `git branch <name>`, `git branch -m`, `git worktree add` (with `-b`, or the new branch git
    names after the path), `git push` (named refs that are local branches, or the current branch) and
-   `dispatch.py new <repo> <branch>`. `main` and `master` are never checked.
+   `dispatch.py new <repo> <branch>`. `main` and `master` are never checked against the pattern; an optional
+   "no_push": ["main"] refuses any push to or delete of the branches it lists (`git push`, `HEAD:main`, `x:main`,
+   `--delete main`, `--all`).
 2. Trees under review. Each subagent call records the git work trees it touches; until that agent stops (or 2 hours
    pass without a call from it), the main session may not Edit/Write a file in those trees or run a command that
-   changes them there (git writes, `gh pr merge/checkout`) (lesson `no-edits-in-trees-agents-read`).
-3. Lesson recall. A Bash command containing a backticked token of six or more characters from a shared-memory
-   lesson's `applies_when` gets that lesson named once per session as context.
+   changes them there (git writes, `gh pr checkout`, `gh pr merge --delete-branch`) (lesson
+   `no-edits-in-trees-agents-read`). Paths inside quoted strings of a subagent's command count too.
+3. Lesson recall. A Bash command that a shared-memory lesson's `match:` regex finds, or (a lesson without `match:`)
+   that contains a backticked token of six or more characters from its `applies_when`, gets that lesson named once
+   per session as context.
 
-Commands are read quote-aware: heredoc bodies are dropped, `;`, `&&`, `||`, `|`, `&`, newlines and parentheses
-split commands only outside quotes, redirections are dropped, and `cd`/`pushd` carry to later commands of the same
-subshell. These catch mistakes, not evasion: an interpreter or a script that runs git passes, and so does git after
-a shell keyword (`then`, `do`, `{`, `time`) or a line continuation. The hook never blocks on its own error: it
+Commands are read quote-aware over the whole text: heredoc bodies are dropped (any delimiter, quoted or backslashed),
+line continuations joined, `;`, `&&`, `||`, `|`, `&`, newlines and parentheses split commands only outside quotes,
+redirections and leading shell keywords and wrappers (`if`, `then`, `do`, `{`, `!`, `time -p`, `env`, `sudo`,
+`timeout 30`, ...) are dropped, and
+`cd`/`pushd` carry to later commands of the same subshell. These catch mistakes, not evasion: an interpreter or a
+script that runs git passes. The hook never blocks on its own error: it
 prints nothing and exits 0, and its settings entry ends in `|| true`.
 """
 import hashlib
@@ -94,54 +100,83 @@ class Locked:
 
 # ---------- command reading ----------
 
-HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
-
-
-def unquoted(line, pos):
-    """True when position pos of a line is outside quotes; `$(` inside double quotes starts an unquoted context."""
-    quote, outer, i = None, [], 0
-    while i < pos:
-        c = line[i]
-        if quote == "'":
-            if c == "'":
-                quote = None
-        elif quote == '"':
-            if c == "\\":
-                i += 1
-            elif line.startswith("$(", i):
-                outer.append('"')
-                quote = None
-                i += 1
-            elif c == '"':
-                quote = None
-        elif c in "'\"":
-            quote = c
-        elif c == "\\":
-            i += 1
-        elif c == ")" and outer:
-            quote = outer.pop()
-        i += 1
-    return quote is None
+HEREDOC = re.compile(r"<<(-?)[ \t]*(?:'([^'\n]+)'|\"([^\"\n]+)\"|\\?([^\s'\"<>|;&()]+))")
 
 
 def strip_heredocs(text):
-    """Drops the body lines of each heredoc (up to its delimiter line); the line that opens it stays."""
-    out, lines, i = [], text.split("\n"), 0
-    while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        delims = [m.group(2) for m in HEREDOC.finditer(line) if unquoted(line, m.start())]
-        i += 1
-        for d in delims:
-            while i < len(lines) and lines[i].strip() != d:
-                i += 1
+    """Drops heredoc bodies (up to each delimiter line), reading quotes over the whole text: a `<<` inside quotes, or
+    `<<<`, starts none; `$(` inside double quotes is unquoted until its `)`; a `#` comment is copied as it is."""
+    out, i, n, quote, outer, pending = [], 0, len(text), None, [], []
+    while i < n:
+        c = text[i]
+        if quote == "'":
+            out.append(c)
+            quote = None if c == "'" else quote
             i += 1
-    return "\n".join(out)
+        elif quote == '"':
+            if c == "\\":
+                out.append(text[i:i + 2])
+                i += 2
+                continue
+            if text.startswith("$(", i):
+                outer.append('"')
+                quote = None
+                out.append("$(")
+                i += 2
+                continue
+            quote = None if c == '"' else quote
+            out.append(c)
+            i += 1
+        elif c in "'\"":
+            quote = c
+            out.append(c)
+            i += 1
+        elif c == "\\":
+            out.append(text[i:i + 2])
+            i += 2
+        elif c == ")" and outer:
+            quote = outer.pop()
+            out.append(c)
+            i += 1
+        elif c == "#" and (not out or out[-1][-1:].isspace() or out[-1][-1:] in ";&|("):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(text[i:j])
+            i = j
+        elif text.startswith("$((", i):
+            j = text.find("))", i)
+            j = n if j < 0 else j + 2
+            out.append(text[i:j])
+            i = j
+        elif text.startswith("<<", i) and not text.startswith("<<<", i) and not (i and text[i - 1] == "<"):
+            m = HEREDOC.match(text, i)
+            if m:
+                pending.append(m.group(2) or m.group(3) or m.group(4))
+                out.append(m.group(0))
+                i = m.end()
+            else:
+                out.append(c)
+                i += 1
+        elif c == "\n" and pending:
+            out.append(c)
+            i += 1
+            for d in pending:
+                while i < n:
+                    j = text.find("\n", i)
+                    j = n if j < 0 else j
+                    line, i = text[i:j], j + 1
+                    if line.strip() == d:
+                        break
+            pending = []
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 def pieces(text):
     """Splits a command line outside quotes into word strings and the markers '(' and ')'."""
-    text = strip_heredocs(text)
+    text = strip_heredocs(text).replace("\\\n", " ")
     out, cur, i, quote, depth = [], [], 0, None, 0
     while i < len(text):
         c = text[i]
@@ -220,10 +255,17 @@ def split_words(piece, keep_redirects=False):
     return kept
 
 
+KEYWORDS = {"if", "then", "elif", "else", "while", "until", "do", "{", "!", "time", "nohup", "env", "command", "exec",
+            "sudo", "xargs", "timeout"}
+TAKES_OPTIONS = ("time", "nohup", "env", "command", "exec", "sudo", "xargs", "timeout")
+
+
 def commands(text, cwd, keep_redirects=False):
-    """(directory, words) for each simple command, following cd/pushd within its subshell."""
+    """(directory, words) for each simple command, following cd/pushd within its subshell; leading variable
+    assignments and shell keywords (`then`, `do`, `{`, `time -p`, ...) dropped."""
     stack, here, out = [], cwd, []
     for p in pieces(text or ""):
+        prev_kw = False
         if p == "(":
             stack.append(here)
             continue
@@ -231,7 +273,16 @@ def commands(text, cwd, keep_redirects=False):
             here = stack.pop() if stack else here
             continue
         words = split_words(p, keep_redirects)
-        while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+        while words and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]) or words[0] in KEYWORDS
+                         or (words[0].startswith("-") and len(words) > 1 and words[1] != "--" and prev_kw)):
+            if words[0] == "timeout" and len(words) > 2:
+                rest = words[1:]
+                while rest and rest[0].startswith("-"):
+                    rest = rest[2:] if rest[0] in ("-s", "--signal", "-k", "--kill-after") else rest[1:]
+                words = ["timeout"] + rest[1:]
+            if words[0] in ("-u", "-g", "--user", "--group", "--unset") and prev_kw and len(words) > 2:
+                words = words[1:]
+            prev_kw = prev_kw if words[0].startswith("-") else words[0] in TAKES_OPTIONS
             words = words[1:]
         if not words:
             continue
@@ -284,8 +335,9 @@ def git_out(d, *args):
 PUSH_OPTS_WITH_VALUE = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
 
 
-def new_branches(text, cwd):
-    """(repo directory, branch name) for each branch a command creates, renames to or pushes."""
+def new_branches(text, cwd, pushes=None):
+    """(repo directory, branch name) for each branch a command creates, renames to or pushes (main and master left
+    out); every pushed branch name, main included, is also added to `pushes` when a list is given."""
     found = []
     for d, sub, args in git_calls(text, cwd):
         if sub in ("checkout", "switch"):
@@ -311,8 +363,11 @@ def new_branches(text, cwd):
                 if len(plain) == 1:
                     found.append((d, Path(plain[0]).name))
         elif sub == "push":
-            if any(a in ("-d", "--delete", "--tags", "--all", "--mirror", "--prune") for a in args):
+            if any(a in ("--all", "--mirror", "--branches") for a in args):
+                if pushes is not None:
+                    pushes.append((d, None))
                 continue
+            deleting = any(a in ("-d", "--delete") for a in args)
             plain, skip = [], False
             for a in args:
                 if skip:
@@ -321,9 +376,17 @@ def new_branches(text, cwd):
                     skip = True
                 elif not a.startswith("-"):
                     plain.append(a)
+            if "--tags" in args and not plain[1:]:
+                continue
             refs = plain[1:] or ["HEAD"]
             for ref in refs:
-                if ref.startswith(":") or "$" in ref:
+                if "$" in ref:
+                    continue
+                if deleting or ref.startswith(":"):
+                    gone = ref.lstrip(":")
+                    gone = gone[len("refs/heads/"):] if gone.startswith("refs/heads/") else gone
+                    if pushes is not None and gone and ref != "HEAD":
+                        pushes.append((d, gone))
                     continue
                 src, _, dst = ref.lstrip("+").partition(":")
                 name = dst or src
@@ -334,6 +397,8 @@ def new_branches(text, cwd):
                     continue
                 if dst or git_out(d, "rev-parse", "--verify", "-q", f"refs/heads/{name}"):
                     found.append((d, name))
+                    if pushes is not None:
+                        pushes.append((d, name))
     for here, words in commands(text, cwd):
         for i, w in enumerate(words):
             if Path(w).name == "dispatch.py" and words[i + 1:i + 2] == ["new"]:
@@ -358,23 +423,41 @@ def new_branches(text, cwd):
     return [(d, n) for d, n in found if n and "$" not in n and n not in ("main", "master")]
 
 
+def branch_rule(d):
+    """(the repo's .claude/branch-name.json as a dict, its path); an empty dict when there is none or it is bad."""
+    top = work_tree(d)
+    if not top:
+        return {}, None
+    rule = Path(top) / ".claude" / "branch-name.json"
+    try:
+        spec = json.loads(rule.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}, rule
+    return (spec if isinstance(spec, dict) else {}), rule
+
+
 def branch_gate(event):
     cmd = (event.get("tool_input") or {}).get("command")
     if not isinstance(cmd, str):
         return None
-    for d, name in new_branches(cmd, event.get("cwd") or os.getcwd()):
-        top = work_tree(d)
-        if not top:
-            continue
-        rule = Path(top) / ".claude" / "branch-name.json"
-        if not rule.exists():
-            continue
+    pushes = []
+    names = new_branches(cmd, event.get("cwd") or os.getcwd(), pushes)
+    for d, name in pushes:
+        spec, rule = branch_rule(d)
+        guarded = spec.get("no_push") if isinstance(spec.get("no_push"), list) else []
+        if name is None:
+            name = next((b for b in guarded if isinstance(b, str)
+                         and git_out(d, "rev-parse", "--verify", "-q", f"refs/heads/{b}")), None)
+        if name is not None and name in guarded:
+            return (f"a push to `{name}` is not allowed in this repo (`no_push` in {rule}); push a branch and open a "
+                    f"PR instead.")
+    for d, name in names:
+        spec, rule = branch_rule(d)
         try:
-            spec = json.loads(rule.read_text(encoding="utf-8"))
             if not isinstance(spec.get("pattern"), str):
                 continue
             ok = re.fullmatch(spec["pattern"], name)
-        except (ValueError, AttributeError, re.error):
+        except re.error:
             continue
         if not ok:
             ex = f" (for example `{spec['example']}`)" if spec.get("example") else ""
@@ -399,6 +482,10 @@ def is_write(sub, args):
     return not any((sub, a) in READ_ONLY for a in args[:2] + [a for a in args if a.startswith("-")])
 
 
+INNER_PATH = re.compile(r"(?<![\w.~/:-])((?:/|~/)[\w.@%+-][^\s'\"()<>|;&,`]*)")
+MAX_DIRS = 200
+
+
 def touched(event):
     cwd = event.get("cwd") or os.getcwd()
     ti = event.get("tool_input") or {}
@@ -410,8 +497,17 @@ def touched(event):
             for i, w in enumerate(words):
                 if (i and words[i - 1] == "-C") or w.startswith(("/", "~/")):
                     paths.append(os.path.join(here, os.path.expanduser(w)))
+                else:
+                    paths += [os.path.expanduser(m) for m in INNER_PATH.findall(w)]
     tops = []
+    seen = []
     for p in dict.fromkeys(paths):
+        d = os.path.dirname(os.path.normpath(os.path.expanduser(str(p)))) if not os.path.isdir(p) else p
+        if d in seen:
+            continue
+        seen.append(d)
+        if len(seen) > MAX_DIRS:
+            break
         t = work_tree(p)
         if t and t not in tops:
             tops.append(t)
@@ -434,7 +530,8 @@ def main_targets(event):
         if is_write(sub, args):
             dirs.append(d)
     for here, words in commands(cmd, cwd):
-        if words[0] == "gh" and words[1:3] in (["pr", "merge"], ["pr", "checkout"]):
+        if words[0] == "gh" and (words[1:3] == ["pr", "checkout"] or words[1:3] == ["pr", "merge"] and any(
+                a == "--delete-branch" or re.fullmatch(r"-[a-zA-Z]*d[a-zA-Z]*", a) for a in words[3:])):
             dirs.append(here)
     tops = []
     for d in dirs:
@@ -470,13 +567,23 @@ def lessons():
         except OSError:
             continue
         head = text.split("\n---", 1)[0] if text.startswith("---") else ""
-        fields = dict(re.findall(r"^(\w+):\s*(.*)$", head, re.M))
+        fields = {k: (v.strip()[1:-1] if len(v.strip()) >= 2 and v.strip()[0] == v.strip()[-1] and v.strip()[0] in "\"'"
+                      else v.strip()) for k, v in re.findall(r"^(\w+):\s*(.*)$", head, re.M)}
         if fields.get("status", "active") != "active":
+            continue
+        if fields.get("match"):
+            try:
+                out.append((f.stem, fields.get("title", f.stem), re.compile(fields["match"])))
+            except re.error:
+                pass
             continue
         tokens = re.findall(r"`([^`]{6,})`", fields.get("applies_when", ""))
         if tokens:
             out.append((f.stem, fields.get("title", f.stem), tokens))
     return out
+
+
+MATCH_CHARS = 20000
 
 
 def lesson_hint(event, state):
@@ -485,7 +592,8 @@ def lesson_hint(event, state):
         return None
     hits = []
     for slug, title, tokens in lessons():
-        if slug not in state["hinted"] and any(t in cmd for t in tokens):
+        hit = tokens.search(cmd[:MATCH_CHARS]) if isinstance(tokens, re.Pattern) else any(t in cmd for t in tokens)
+        if slug not in state["hinted"] and hit:
             hits.append(f"lesson `{slug}`: {title}")
             state["hinted"].append(slug)
     if not hits:
@@ -556,13 +664,19 @@ def self_test():
         subprocess.run(["git", "-C", str(repo), "branch", "aps-9-ok"], check=True)
         subprocess.run(["git", "-C", str(repo), "branch", "feature-old"], check=True)
         (repo / ".claude").mkdir()
-        (repo / ".claude" / "branch-name.json").write_text(json.dumps({"pattern": r"aps-\d+-[a-z0-9-]+", "example": "aps-1-x"}))
+        (repo / ".claude" / "branch-name.json").write_text(json.dumps({"pattern": r"aps-\d+-[a-z0-9-]+", "example": "aps-1-x",
+                                                                            "no_push": ["main"]}))
         MEMORY = tmp / "memory"
         (MEMORY / "lessons").mkdir(parents=True)
         (MEMORY / "lessons" / "kill-own-shell.md").write_text(
             "---\ntitle: Do not pkill -f your own command line\napplies_when: when `pkill -f` targets a pattern\nstatus: active\n---\nbody\n")
         (MEMORY / "lessons" / "units.md").write_text(
-            "---\ntitle: Units kill detached children\napplies_when: when code starts `--no-block` units\nstatus: active\n---\n")
+            "---\ntitle: Units kill detached children\napplies_when: when code starts `--no-block` units\n"
+            "match: systemd-run\\b(?![^\\n]*--scope)\nstatus: active\n---\n")
+        (MEMORY / "lessons" / "quoted.md").write_text(
+            "---\ntitle: Quoted\napplies_when: when x\nmatch: \"\\bfoo-quoted\\b\"\nstatus: active\n---\n")
+        (MEMORY / "lessons" / "bad-regex.md").write_text(
+            "---\ntitle: Bad\napplies_when: when `echo hello` runs\nmatch: echo (\nstatus: active\n---\n")
         (MEMORY / "lessons" / "old.md").write_text(
             "---\ntitle: Old\napplies_when: when `pkill -f` runs\nstatus: superseded\n---\n")
 
@@ -593,7 +707,7 @@ def self_test():
                  ("git push -o ci.skip origin aps-9-ok", False), ("git push origin -o feature-old aps-9-ok", False),
                  ("git push origin --delete feature-old", False), ("git push origin -d feature-old", False),
                  ("git push origin :feature-old", False), ("git push origin v1.0.0", False),
-                 ("git push --tags", False), ("git push", False), ('git checkout -b "$B"', False),
+                 ("git push --tags", False), ("git push", True), ('git checkout -b "$B"', False),
                  (f"python3 scripts/dispatch.py new {repo} wip", True),
                  (f"python3 scripts/dispatch.py new --task p.md T1 {repo} wip", True),
                  (f"python3 scripts/dispatch.py new {repo} aps-3-x --allow a b --check c", False),
@@ -604,7 +718,28 @@ def self_test():
                  ("git log --grep '>' feature-old", False), ('git commit -m "$(echo "a; git checkout -b wip")"', False),
                  ("git branch > /dev/null", False), ("git branch &> f", False),
                  ("git checkout -B main origin/main", False), ("git branch -M main", False),
-                 ("git push origin main", False), ("git worktree add ../bad 2>&1", True),
+                 ("git push origin main", True), ("git push origin HEAD:main", True),
+                 ("git push origin aps-9-ok:main", True), ("git push origin main:aps-9-ok", False),
+                 ("git push origin main --tags", True), ("git push --all", True), ("git push --mirror origin", True),
+                 ("git push origin --delete main", True), ("git push origin :main", True),
+                 ("env git checkout -b wip", True), ("command git checkout -b wip", True),
+                 ("exec git checkout -b wip", True), ("nohup git checkout -b wip", True),
+                 ("for x in a; do git checkout -b wip; done", True), ("if true; then :; else git checkout -b wip; fi", True),
+                 ("! git checkout -b wip", True), ("sudo git checkout -b wip", True),
+                 ("timeout 30 git checkout -b wip", True), ("timeout -s KILL 30 git checkout -b wip", True),
+                 ("xargs -n1 git checkout -b wip", True), ("sudo -u root git checkout -b wip", True),
+                 ("env -u X git checkout -b wip", True), ("echo 'a << EOF'\ngit checkout -b wip", True),
+                 ("cat <<EOF\nline one\ngit checkout -b wip\nEOF", False),
+                 ("echo 'x' && cat <<EOF\ngit checkout -b wip\nEOF", False),
+                 ("cat > f <<\\EOF\nbody\nEOF\ngit checkout -b wip", True),
+                 ("if git diff --quiet; then git checkout -b wip; fi", True), ("{ git checkout -b wip; }", True),
+                 ("time git checkout -b wip", True), ("time -p git checkout -b wip", True),
+                 ("git checkout \\\n  -b wip", True),
+                 ("cat > f <<'END-OF-FILE'\ngit checkout -b wip\nEND-OF-FILE", False),
+                 ("cat > f <<\\EOF\ngit checkout -b wip\nEOF", False),
+                 ('cat "$(pwd)/f" <<EOF\ngit checkout -b wip\nEOF', False),
+                 ('echo "line one\n<< EOF"\ngit checkout -b wip', True),
+                 ("echo a # a comment with << EOF\ngit checkout -b wip", True), ("git worktree add ../bad 2>&1", True),
                  ('gh pr create --body "$(cat <<\'EOF\'\ngit checkout -b feature/x\nEOF\n)"', False),
                  ("FOO=1 git checkout -b wip", True), ("echo a; git checkout -b wip", True),
                  ("echo a\ngit checkout -b wip", True), ('git commit -m "a; git checkout -b wip"', False)]
@@ -614,7 +749,12 @@ def self_test():
         subprocess.run(["git", "-C", str(repo), "checkout", "-q", "feature-old"], check=True)
         if not denied(bash("git push")) or not denied(bash("git push -u origin HEAD")):
             problems.append("branch gate: push of the current branch not checked")
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "aps-9-ok"], check=True)
+        if not denied(bash("git push --all origin")) or denied(bash("git push origin aps-9-ok")):
+            problems.append("no_push: --all from another branch not refused, or a plain push refused")
         subprocess.run(["git", "-C", str(repo), "checkout", "-q", "main"], check=True)
+        if denied(bash("git push --all", cwd=other)):
+            problems.append("no_push applied to a repo without a rule")
         if denied(bash("git checkout -b anything", cwd=other)):
             problems.append("branch gate applied to a repo without a rule")
         if denied(bash(f"git -C {other} checkout -b feature/x")) or \
@@ -629,14 +769,16 @@ def self_test():
                   f"(cd {other} && git status) && git commit -qm x",
                   'python3 -c "print(1 << n)"\ngit commit -qm x', "cat <<< hello\ngit commit -qm x",
                   "git commit -qm x 2>&1 | tail -3", 'echo "$(date) <<EOF"\ngit commit -qm x',
-                  'git commit -m "$(cat <<\'EOF\'\nFix parser (APS-66)\n\nRefuse "x\nEOF\n)" && git commit -qm y']
+                  'git commit -m "$(cat <<\'EOF\'\nFix parser (APS-66)\n\nRefuse "x\nEOF\n)" && git commit -qm y',
+                  "echo $((1 << 2))\ngit commit -qm x", f"git -C {repo} \\\n  commit -qm x", "gh pr checkout 3",
+                  "gh pr merge 3 -sd"]
         for cmd in writes:
             start = tmp if cmd.startswith(("cd ", f"(cd {repo}", "pushd", "git -C")) else repo
             if not denied(bash(cmd, cwd=start)):
                 problems.append(f"review gate: write allowed: {cmd!r}")
         reads = ["git status", "git diff main", "git log -1", "git fetch -q origin", "git stash list",
                  "git apply --check p.diff", "git clean -n", "git clean -nd", "git worktree add ../w2 -b aps-5-ok main",
-                 f"(cd {repo} && git status) && git -C {other} commit -qm x"]
+                 f"(cd {repo} && git status) && git -C {other} commit -qm x", "gh pr merge 3 --squash"]
         for cmd in reads:
             if denied(bash(cmd)):
                 problems.append(f"review gate: read or other tree denied: {cmd!r}")
@@ -682,6 +824,30 @@ def self_test():
             if not denied(bash("git commit -qm x")):
                 problems.append(f"review gate: path of a subagent redirect or quoted operator not recorded: {cmd!r}")
             clear("r9")
+        bash(f"python3 -c \"open('{repo}/README').read()\"", cwd=tmp, agent="r10")
+        if not denied(bash("git commit -qm x")):
+            problems.append("review gate: a path inside a quoted string of a subagent call not recorded")
+        clear("r10")
+        bash("cat " + " ".join(f"/tmp/nowhere-{k}/x" for k in range(45)) + f" {repo}/README", cwd=tmp, agent="r11")
+        if not denied(bash("git commit -qm x")):
+            problems.append("review gate: a path after many others not recorded")
+        clear("r11")
+        bash(f"scp host:{repo}/README /tmp/x", cwd=tmp, agent="r12")
+        if denied(bash("git commit -qm x")):
+            problems.append("review gate: a remote host:path recorded as a local tree")
+        clear("r12")
+        env = dict(os.environ, TMPDIR=tempfile.tempdir)
+        procs = [subprocess.Popen([sys.executable, os.path.abspath(__file__), "pre-tool"], stdin=subprocess.PIPE, env=env,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for _ in range(16)]
+        for k, pr in enumerate(procs):
+            pr.stdin.write(json.dumps({"session_id": "par", "cwd": str(tmp), "tool_name": "Read", "agent_id": f"p{k}",
+                                       "tool_input": {"file_path": str(tmp)}}).encode())
+            pr.stdin.close()
+        for pr in procs:
+            pr.wait(timeout=60)
+        with Locked(state_path("par")) as st:
+            if len(st["agents"]) != 16:
+                problems.append(f"parallel records lost: {len(st['agents'])} of 16 kept")
         global fcntl
         saved_fcntl, fcntl = fcntl, None
         try:
@@ -706,6 +872,10 @@ def self_test():
             problems.append(f"lesson hint by token: {out}")
         if bash("pkill -f 'other'"):
             problems.append("lesson hinted twice in one session")
+        if "quoted" not in ((bash("run foo-quoted now") or {}).get("hookSpecificOutput", {}).get("additionalContext", "")):
+            problems.append("a quoted match: value not unquoted")
+        if bash("systemd-run --user --scope -q -p MemoryMax=4G true"):
+            problems.append("a lesson's match ignored: hinted on the memory-cap command")
         if "units" not in ((bash("systemd-run --user --no-block true") or {}).get("hookSpecificOutput", {})
                            .get("additionalContext", "")):
             problems.append("second lesson not hinted")

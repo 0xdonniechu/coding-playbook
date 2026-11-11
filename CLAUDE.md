@@ -17,7 +17,7 @@ Rated by undo cost (global "Task rating", owner decision 2026-11-11): HARD here 
 - `scripts/dispatch.py`: the task contract a builder works to, which `hooks/agent-guard.py` enforces, and the task parser in `scripts/sdlc-check.py` that `--task` reads it from.
 - `loop/loop.py` and `loop/loop-stop.py`: the one-prompt run, its evidence-based done and verdicts per task.
 - `loop/loop-wake.py`: waking a dead run under spend caps.
-- `gates/session-gates.py` and `.claude/branch-name.json`: the session gates (branch names, trees a running subagent read, lesson recall); a gate that wrongly allows lets the slip through, one that wrongly refuses stalls every session.
+- `gates/session-gates.py` and `.claude/branch-name.json`: the session gates (branch names, no push to `main`, trees a running subagent read, lesson recall); a gate that wrongly allows lets the slip through, one that wrongly refuses stalls every session.
 - The installer's writes to `~/.claude` (backups, the marker block, which also takes over a block left by an earlier `coding-playbook` or `claudecode-guide` install, skill folders, `hooks/saveit`, `hooks/loop`, `hooks/graph` and `hooks/gates`, and with `--settings` the entries of `rores/global/settings-defaults.json` and the session hook entries in `settings.json` (PreToolUse, SessionStart, PreCompact, Stop, SubagentStop, SessionEnd; an entry already there is brought to this repo's timeout), each appended once beside any other hooks; it never sets the model and never deletes).
 
 ## MEDIUM: builder builds, reviewer reviews
