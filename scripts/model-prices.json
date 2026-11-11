@@ -1,0 +1,11 @@
+{
+  "source": "Anthropic API skill model table, cached 2026-11-03. USD per million tokens. Cache writes are priced as multipliers of input.",
+  "cache_write_5m": 1.25,
+  "cache_write_1h": 2.0,
+  "models": {
+    "claude-opus-5-5": {"input": 4, "output": 20, "cache_read": 0.20},
+    "claude-sonnet-5-5": {"input": 2, "output": 10, "cache_read": 0.10},
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "cache_read": 0.01, "assumed": ["cache_read"]},
+    "claude-fable-5-2": {"input": 8, "output": 40, "cache_read": 0.20}
+  }
+}
