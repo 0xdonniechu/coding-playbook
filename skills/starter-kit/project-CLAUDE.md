@@ -26,7 +26,7 @@ These commands are the default checks of a builder's task contract (`dispatch.py
 ## Rules
 - Never silently change <thresholds / protected lists / formats>. Flag it and ask.
 - <Grep lists or lint scripts that must stay at zero hits>
-- <Git: account, author, branch naming, commit format, PR policy, "do not merge without being asked">
+- <Git: account, author, branch naming, commit format, PR policy; merges: on its own once Verify and review passed, except a merge that publishes or deploys (say what a merge to main publishes)>
 - <Issue tracker: where items live, language>
 
 ## Read when

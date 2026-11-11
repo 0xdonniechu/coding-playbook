@@ -6,7 +6,8 @@
   python scripts/install.py --global   also put rores/global/CLAUDE.md into ~/.claude/CLAUDE.md, between markers
   python scripts/install.py --settings also merge rores/global/settings-defaults.json (enabledPlugins, skillOverrides)
                                        into ~/.claude/settings.json and register the session hooks (owner-token guard,
-                                       save-it SessionStart and PreCompact, the loop's Stop), backing it up first
+                                       save-it SessionStart and PreCompact, the loop's Stop, the session graph's
+                                       SessionEnd and SessionStart), backing it up first
   python scripts/install.py --check    change nothing; exit 1 if the installed copy differs from this repo
   python scripts/install.py --help     print this and change nothing; any other argument: exit 2, nothing written
 
@@ -83,6 +84,8 @@ GUARD_COMMAND = 'python3 "$HOME/.claude/hooks/owner-token-guard/owner-token-guar
 SAVEIT_COMMAND = 'python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" {mode} || true'
 # `|| true` here too: exit 2 from a Stop hook would keep the session going.
 LOOP_COMMAND = 'python3 "$HOME/.claude/hooks/loop/loop-stop.py" || true'
+# The session graph (APS-57): SessionEnd only starts a detached refresh (Claude Code gives it a short budget).
+GRAPH_COMMAND = 'python3 "$HOME/.claude/hooks/graph/graph-hook.py" {mode} || true'
 SESSION_HOOKS = [
     ("owner-token guard hook", "PreToolUse",
      {"matcher": "Bash|Read|Grep|Glob", "hooks": [{"type": "command", "command": GUARD_COMMAND}]}),
@@ -93,6 +96,10 @@ SESSION_HOOKS = [
     # The one-prompt loop (APS-56): holds a session only while it has a running run file (loop/loop.py start).
     ("one-prompt loop Stop hook", "Stop",
      {"hooks": [{"type": "command", "command": LOOP_COMMAND, "timeout": 60}]}),
+    ("session graph SessionEnd hook", "SessionEnd",
+     {"hooks": [{"type": "command", "command": GRAPH_COMMAND.format(mode="session-end"), "timeout": 10}]}),
+    ("session graph SessionStart hook", "SessionStart",
+     {"hooks": [{"type": "command", "command": GRAPH_COMMAND.format(mode="session-start"), "timeout": 10}]}),
 ]
 # Global instructions, between markers, keeping everything else in the file byte for byte. Read and checked here,
 # before anything is written, so a refusal leaves the machine as it was; written further down.
@@ -168,6 +175,7 @@ for name in sorted(json.loads((ROOT / "hooks" / "pin.json").read_text(encoding="
 install_file(ROOT / "guard" / "owner-token-guard.py", HOME / "hooks" / "owner-token-guard" / "owner-token-guard.py")
 install_file(ROOT / "saveit" / "saveit-hook.py", HOME / "hooks" / "saveit" / "saveit-hook.py")
 install_file(ROOT / "loop" / "loop-stop.py", HOME / "hooks" / "loop" / "loop-stop.py")
+install_file(ROOT / "graph" / "graph-hook.py", HOME / "hooks" / "graph" / "graph-hook.py")
 
 # Agents
 for src in sorted((ROOT / "rores" / "agents").glob("*.md")):
