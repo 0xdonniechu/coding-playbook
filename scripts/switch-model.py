@@ -9,7 +9,9 @@ For an agent role it edits the agent file's `model:`, the role's line in rores/g
 row, and one dated "Switch (...)" line under "Current choice". For `main` it edits the "Current choice" line and the
 main session's effort entry, then prints the owner's steps: settings.json stays owner-only. It edits this repo's
 working tree only (never ~/.claude), never commits or installs, and writes nothing unless every edit applies and
-check.py passes before and after (a failure after writing restores the files). Standard library only.
+check.py passes before and after (a failure after writing restores the files). Its self-test runs check.py in
+scratch copies with SWITCH_MODEL_SELF_TEST set, where check.py skips the scripts' self-tests (the outer run has them)
+and keeps every file and consistency check. Standard library only.
 """
 import argparse
 import ast

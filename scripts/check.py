@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +32,33 @@ OVERRIDES = {"on", "name-only", "user-invocable-only", "off"}
 DESCRIPTION_LIMIT = 1024  # the Agent Skills spec maximum; Claude Code's own cut-off is higher
 
 failures = []
+
+# The scripts' own --self-test runs are independent of each other and of the file checks below, so they start at once on a
+# few worker threads (slowest first) and each result is read, and its failure reported, at the place it always was: the
+# order of the output does not depend on which finishes first. scripts/switch-model.py's self-test runs this file in scratch
+# copies with SWITCH_MODEL_SELF_TEST set: a copy differs from this tree only in the files a model switch edits, so there
+# the script self-tests (same code, already run by the outer run) are skipped and the file and consistency checks run.
+SELF_TESTS = [("scripts/switch-model.py", False, None), ("scripts/sdlc-check.py", False, None), ("loop/loop-stop.py", False, 600),
+              ("graph/graph-hook.py", False, 600), ("scripts/plane.py", False, None), ("hooks/agent-guard.py", True, None),
+              ("scripts/dispatch.py", False, None), ("loop/loop.py", False, 600), ("saveit/saveit-hook.py", False, None),
+              ("scripts/progress-diagram.py", False, None), ("scripts/github-boundary.py", True, None),
+              ("guard/owner-token-guard.py", True, None), ("scripts/switch-test.py", False, None)]
+IN_SWITCH_COPY = bool(os.environ.get("SWITCH_MODEL_SELF_TEST"))
+_pool = ThreadPoolExecutor(max_workers=6)
+_futures = {} if IN_SWITCH_COPY else {
+    rel: _pool.submit(subprocess.run, [sys.executable, str(ROOT / rel), "--self-test"], capture_output=True, text=True, timeout=timeout)
+    for rel, _, timeout in SELF_TESTS}
+_stdout_only = {rel: only for rel, only, _ in SELF_TESTS}
+
+
+def self_test(rel):
+    """The finished run of rel --self-test (None in a switch-model copy); a failure is reported as it always was."""
+    if IN_SWITCH_COPY:
+        return None
+    run = _futures[rel].result()
+    if run.returncode != 0:
+        fail(f"{rel} --self-test failed:\n" + (run.stdout if _stdout_only[rel] else run.stdout + run.stderr).strip())
+    return run
 
 
 def fail(msg):
@@ -123,30 +151,16 @@ try:  # the settings file an autonomous run loads: the boundary hook before and 
             raise ValueError(f"{event} must run agent-guard.py {mode}" + (f" on matcher \"{matcher}\"" if matcher else ""))
 except (ValueError, KeyError, TypeError, IndexError, AttributeError) as error:
     fail(f"hooks/autonomous-settings.json: not the expected settings ({type(error).__name__}: {error})")
-guard = subprocess.run([sys.executable, str(ROOT / "guard" / "owner-token-guard.py"), "--self-test"], capture_output=True, text=True)
-if guard.returncode != 0:
-    fail("guard/owner-token-guard.py --self-test failed:\n" + guard.stdout.strip())
-saveit = subprocess.run([sys.executable, str(ROOT / "saveit" / "saveit-hook.py"), "--self-test"], capture_output=True, text=True)
-if saveit.returncode != 0:
-    fail("saveit/saveit-hook.py --self-test failed:\n" + (saveit.stdout + saveit.stderr).strip())
-for script in ("loop.py", "loop-stop.py"):
-    run = subprocess.run([sys.executable, str(ROOT / "loop" / script), "--self-test"], capture_output=True, text=True, timeout=600)
-    if run.returncode != 0:
-        fail(f"loop/{script} --self-test failed:\n" + (run.stdout + run.stderr).strip())
-graph = subprocess.run([sys.executable, str(ROOT / "graph" / "graph-hook.py"), "--self-test"], capture_output=True, text=True, timeout=600)
-if graph.returncode != 0:
-    fail("graph/graph-hook.py --self-test failed:\n" + (graph.stdout + graph.stderr).strip())
-plane = subprocess.run([sys.executable, str(ROOT / "scripts" / "plane.py"), "--self-test"], capture_output=True, text=True)
-if plane.returncode != 0:
-    fail("scripts/plane.py --self-test failed:\n" + (plane.stdout + plane.stderr).strip())
-diagram = subprocess.run([sys.executable, str(ROOT / "scripts" / "progress-diagram.py"), "--self-test"], capture_output=True, text=True)
-if diagram.returncode != 0:
-    fail("scripts/progress-diagram.py --self-test failed:\n" + (diagram.stdout + diagram.stderr).strip())
-elif diagram.stdout.startswith("not run"):
+self_test("guard/owner-token-guard.py")
+self_test("saveit/saveit-hook.py")
+self_test("loop/loop.py")
+self_test("loop/loop-stop.py")
+self_test("graph/graph-hook.py")
+self_test("scripts/plane.py")
+diagram = self_test("scripts/progress-diagram.py")
+if diagram and diagram.returncode == 0 and diagram.stdout.startswith("not run"):
     print("note: " + diagram.stdout.strip())
-boundary = subprocess.run([sys.executable, str(ROOT / "scripts" / "github-boundary.py"), "--self-test"], capture_output=True, text=True)
-if boundary.returncode != 0:
-    fail("scripts/github-boundary.py --self-test failed:\n" + boundary.stdout.strip())
+self_test("scripts/github-boundary.py")
 try:
     gb = json.loads(read("scripts/github-boundary.json"))
     if not (isinstance(gb.get("owner"), str) and isinstance(gb.get("repos"), list) and isinstance(gb.get("codeowners"), list)
@@ -189,9 +203,7 @@ try:
         print("note: no ambysto-1prompt clone next to this repo; hooks checked against pin.json hashes only")
 except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
     fail(f"hooks/pin.json: {type(error).__name__}: {error}")
-guard = subprocess.run([sys.executable, str(ROOT / "hooks" / "agent-guard.py"), "--self-test"], capture_output=True, text=True)
-if guard.returncode != 0:
-    fail("hooks/agent-guard.py --self-test failed:\n" + guard.stdout.strip())
+self_test("hooks/agent-guard.py")
 
 global_md = read("rores/global/CLAUDE.md")
 for name in sorted(AGENTS & set(agents)):
@@ -230,23 +242,14 @@ elif len({choice.group(1), entry.group(1), model_label(example.group(1)), model_
 # The model switch kit (APS-45): cases valid (its self-test), and no model ID in the kit that nobody chose: the agents'
 # pins, the one the kit measures against (Fable 5.1), and a published candidate the owner wrote in candidates.txt.
 # The sdlc chain (APS-51): the task contract from a plan, clarify and converge.
-for script in ("dispatch.py", "sdlc-check.py"):
-    run = subprocess.run([sys.executable, str(ROOT / "scripts" / script), "--self-test"], capture_output=True, text=True)
-    if run.returncode != 0:
-        fail(f"scripts/{script} --self-test failed:\n" + (run.stdout + run.stderr).strip())
-kit = subprocess.run([sys.executable, str(ROOT / "scripts" / "switch-test.py"), "--self-test"], capture_output=True, text=True)
-if kit.returncode != 0:
-    fail("scripts/switch-test.py --self-test failed:\n" + (kit.stdout + kit.stderr).strip())
+self_test("scripts/dispatch.py")  # the builder dispatch helper (APS-46): worktree and task contract
+self_test("scripts/sdlc-check.py")
+self_test("scripts/switch-test.py")
 # The one-command switch (APS-47). Its self-test runs this file in a scratch copy, with the variable set: skip it there.
-if os.environ.get("SWITCH_MODEL_SELF_TEST"):
-    print("note: SWITCH_MODEL_SELF_TEST is set (a switch-model self-test copy); its self-test is not run here")
+if IN_SWITCH_COPY:
+    print("note: SWITCH_MODEL_SELF_TEST is set (a switch-model self-test copy); the script self-tests, switch-model's own included, are not run here")
 else:
-    switch = subprocess.run([sys.executable, str(ROOT / "scripts" / "switch-model.py"), "--self-test"], capture_output=True, text=True)
-    if switch.returncode != 0:
-        fail("scripts/switch-model.py --self-test failed:\n" + (switch.stdout + switch.stderr).strip())
-dispatch = subprocess.run([sys.executable, str(ROOT / "scripts" / "dispatch.py"), "--self-test"], capture_output=True, text=True)
-if dispatch.returncode != 0:  # the builder dispatch helper (APS-46): worktree and task contract
-    fail("scripts/dispatch.py --self-test failed:\n" + (dispatch.stdout + dispatch.stderr).strip())
+    self_test("scripts/switch-model.py")
 candidates = ROOT / "switch-test" / "candidates.txt"
 allowed = {f.get("model") for f, _ in agents.values()} | {"claude-fable-5-1"} | \
     ({line.split()[0] for line in candidates.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")}
@@ -400,4 +403,4 @@ if failures:
     for f in failures:
         print(f"- {f}")
     sys.exit(1)
-print(f"PASS: {len(agents)} agents pinned, reviewer bodies equal, guard hooks set and self-tested, session hooks registered once, global matches the pinned models, template sections present, {len(skills)} skills valid, settings defaults valid")
+print(f"PASS: {len(agents)} agents pinned, reviewer bodies equal, guard hooks set and " + ("not self-tested (SWITCH_MODEL_SELF_TEST is set: script self-tests skipped)" if IN_SWITCH_COPY else "self-tested") + f", session hooks registered once, global matches the pinned models, template sections present, {len(skills)} skills valid, settings defaults valid")
