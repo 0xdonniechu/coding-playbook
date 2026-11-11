@@ -124,11 +124,47 @@ BRACE_OP = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])(?:\[[^]\n]{0
 READINGS = (("main", "all"), ("new", "all"), ("new", "pattern"), ("new", "none"))  # main first: its commands
 # come first in the union, so a cap on what is recorded (MAX_DIRS) never drops one of them
 READING = ("new", "all")
+SCAN_BUDGET = 4  # characters looked at for closes, per character of a text (plus 4096): only nested `$((` or
+# unclosed `$(` by the thousand spend it, so a text that would otherwise take seconds is read in one pass
 
 
-def strip_heredocs(text):
+def body_substitutions(body):
+    """The `$( … )` and backtick substitutions an unquoted heredoc body runs, as written (quotes in a body are
+    plain text; `\\$` and `` \\` `` are not substitutions; `$(( … ))` arithmetic is not one, its inner ones are).
+    After an unclosed `$(` the body is read on (bash runs nothing after it and dash none of the body, but the scanner
+    may be wrong about it), until SCAN_BUDGET is spent; an unclosed backtick ends the list."""
+    subs, i, budget = [], 0, SCAN_BUDGET * len(body) + 4096
+    while i < len(body):
+        if body[i] == "\\":
+            i += 2
+        elif body.startswith("$(", i):
+            if budget <= 0:
+                break
+            j = substitution_end(body, i + 2)
+            budget -= (j or len(body)) - i
+            if j is None:
+                i += 2
+            elif body.startswith("$((", i) and body[j - 2:j] == "))":
+                i += 3  # arithmetic: read on inside it
+            else:
+                subs.append(body[i:j])
+                i = j
+        elif body[i] == "`":
+            j = backtick_end(body, i)
+            if j is None:
+                break
+            subs.append(body[i:j])
+            i = j
+        else:
+            i += 1
+    return subs
+
+
+def strip_heredocs(text, depth=0):
     """Drops heredoc bodies (up to each delimiter line), reading quotes over the whole text: a `<<` inside quotes, or
-    `<<<`, starts none; `$(` inside double quotes is unquoted until its `)`; a `#` comment is copied as it is."""
+    `<<<`, starts none; `$(` inside double quotes is unquoted until its `)`; a `#` comment is copied as it is. In the
+    new readings, the substitutions an unquoted body runs are kept where the body was, as a `:` command, their own
+    heredocs stripped (to MAX_NEST deep); main's reading drops the body whole, as main does."""
     out, i, n, quote, outer, pending = [], 0, len(text), None, [], []
     while i < n:
         c = text[i]
@@ -178,7 +214,8 @@ def strip_heredocs(text):
         elif text.startswith("<<", i) and not text.startswith("<<<", i) and not (i and text[i - 1] == "<"):
             m = HEREDOC.match(text, i)
             if m:
-                pending.append(m.group(2) or m.group(3) or m.group(4))
+                plain = bool(m.group(4)) and "\\" not in m.group(0)  # an unquoted delimiter: the shell expands the body
+                pending.append((m.group(2) or m.group(3) or m.group(4), plain))
                 out.append(m.group(0))
                 i = m.end()
             else:
@@ -187,13 +224,21 @@ def strip_heredocs(text):
         elif c == "\n" and pending:
             out.append(c)
             i += 1
-            for d in pending:
+            runs = []
+            for d, plain in pending:
+                body = []
                 while i < n:
                     j = text.find("\n", i)
                     j = n if j < 0 else j
                     line, i = text[i:j], j + 1
                     if line.strip() == d:
                         break
+                    body.append(line)
+                if plain and READING[0] == "new":
+                    runs += [strip_heredocs(r, depth + 1) if depth < MAX_NEST else r
+                             for r in body_substitutions("\n".join(body))]
+            if runs:  # what an unquoted body runs, kept as a `:` command where the body was
+                out.append(": " + " ".join(runs) + "\n")
             pending = []
         else:
             out.append(c)
@@ -201,9 +246,10 @@ def strip_heredocs(text):
     return "".join(out)
 
 
-def pieces(text):
-    """Splits a command line outside quotes into word strings and the markers '(' and ')'."""
-    text = strip_heredocs(text).replace("\\\n", " ")
+def pieces(text, strip=True):
+    """Splits a command line outside quotes into word strings and the markers '(' and ')'. A substitution's body
+    comes from text already stripped of heredoc bodies, so it is not stripped again (`strip=False`)."""
+    text = (strip_heredocs(text) if strip else text).replace("\\\n", " ")
     # scan: no `$(` has failed to close yet; after one has, the rest is read character by character (bash would
     # stop there anyway), so a long unclosed text costs one pass, not one per `$(`.
     out, cur, i, quote, scan = [], [], 0, None, True
@@ -214,6 +260,10 @@ def pieces(text):
             if c == "\\" and quote == '"' and i + 1 < len(text):
                 cur.append(text[i + 1])
                 i += 1
+            elif quote == '"' and c == "`" and READING[0] == "new" and backtick_end(text, i):
+                j = backtick_end(text, i)
+                cur.append(text[i + 1:j])
+                i = j - 1
             elif quote == '"' and scan and text.startswith(("$(", "${"), i):
                 j = quoted_end(text, i)
                 if j is None:
@@ -233,6 +283,10 @@ def pieces(text):
         elif c == "\\" and i + 1 < len(text):
             cur.append(text[i:i + 2])
             i += 1
+        elif c == "`" and READING[0] == "new" and backtick_end(text, i):  # main's reading split inside backticks
+            j = backtick_end(text, i)
+            cur.append(text[i:j])
+            i = j - 1
         elif text.startswith("$(", i):
             j = substitution_end(text, i + 2) if scan else None
             scan = scan and j is not None
@@ -478,10 +532,20 @@ def scan_end_main(s, i, stack):
     return None
 
 
-def blank_substitutions(s):
-    """Each `$( … )` and backtick substitution outside single quotes becomes the one word-safe token `$SUBST`, so
-    its inner words are not read as the outer command's arguments (`-b feat-$(git -C x rev-parse HEAD)`)."""
-    out, i, quote = [], 0, None
+def backtick_end(s, i):
+    """Index just past the backtick closing the one at i (`\\`` does not close it); None when it never closes."""
+    j = i + 1
+    while j < len(s) and s[j] != "`":
+        j += 2 if s[j] == "\\" else 1
+    return j + 1 if j < len(s) else None
+
+
+def split_substitutions(s):
+    """(text, bodies): each `$( … )` and backtick substitution outside single quotes becomes the one word-safe token
+    `$SUBST`, so its inner words are not read as the outer command's arguments (`-b feat-$(git -C x rev-parse
+    HEAD)`); `bodies` are the commands inside them (backslashes before `` ` ``, `\\` and `$` in a backtick one
+    removed, as the shell does), which commands() reads as commands of their own."""
+    out, bodies, i, quote, budget = [], [], 0, None, SCAN_BUDGET * len(s) + 4096
     while i < len(s):
         c = s[i]
         if quote == "'":
@@ -499,27 +563,42 @@ def blank_substitutions(s):
             out.append(s[i:i + 2])
             i += 2
             continue
-        elif s.startswith("$(", i) and not s.startswith("$((", i):
+        elif s.startswith("$((", i):
+            if budget > 0:  # once SCAN_BUDGET is spent, `$((` is taken as arithmetic: nested ones cost one pass each
+                j = substitution_end(s, i + 2)
+                budget -= (j or len(s)) - i
+                if j is not None and s[j - 2:j] != "))":  # `$((cmd); …)`: a subshell in a substitution, not arithmetic
+                    bodies.append(s[i + 2:j - 1])
+                    if READING[0] == "new":
+                        out.append("$SUBST")
+                        i = j
+                        continue
+            # arithmetic, or main's reading, which reads on inside it as main does (the `$` is copied below)
+        elif s.startswith("$(", i):
             j = substitution_end(s, i + 2)
             if j is None:
                 out.append(s[i:])
                 break
             out.append("$SUBST")
+            bodies.append(s[i + 2:j - 1])
             i = j
             continue
         elif c == "`":
-            j = i + 1
-            while j < len(s) and s[j] != "`":
-                j += 2 if s[j] == "\\" else 1
-            if j >= len(s):
+            j = backtick_end(s, i)
+            if j is None:
                 out.append(s[i:])
                 break
             out.append("$SUBST")
-            i = j + 1
+            bodies.append(re.sub(r"\\([`\\$])", r"\1", s[i + 1:j - 1]))
+            i = j
             continue
         out.append(c)
         i += 1
-    return "".join(out)
+    return "".join(out), bodies
+
+
+def blank_substitutions(s):
+    return split_substitutions(s)[0]
 
 
 def split_words(piece, keep_redirects=False):
@@ -559,7 +638,7 @@ def commands(text, cwd, keep_redirects=False):
     assignments and shell keywords (`then`, `do`, `{`, `time -p`, ...) dropped."""
     global READING
     text = text or ""
-    if "$(" not in text and "${" not in text:
+    if "$(" not in text and "${" not in text and "`" not in text:
         return commands_read(text, cwd, keep_redirects)
     out, seen = [], set()
     try:
@@ -581,9 +660,12 @@ def commands(text, cwd, keep_redirects=False):
     return out
 
 
-def commands_read(text, cwd, keep_redirects=False):
+MAX_NEST = 8  # substitutions inside substitutions read this deep (deeper ones pass)
+
+
+def commands_read(text, cwd, keep_redirects=False, depth=0):
     stack, here, out = [], cwd, []
-    for p in pieces(text or ""):
+    for p in pieces(text or "", strip=depth == 0):
         prev_kw = False
         if p == "(":
             stack.append(here)
@@ -591,6 +673,9 @@ def commands_read(text, cwd, keep_redirects=False):
         if p == ")":
             here = stack.pop() if stack else here
             continue
+        if depth < MAX_NEST and ("$(" in p or "`" in p):
+            for body in split_substitutions(p)[1]:  # the commands a substitution runs, in a subshell
+                out.extend(commands_read(body, here, keep_redirects, depth + 1))
         words = split_words(p, keep_redirects)
         while words and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]) or words[0] in KEYWORDS
                          or (words[0].startswith("-") and len(words) > 1 and words[1] != "--" and prev_kw)):
@@ -1051,6 +1136,7 @@ def self_test():
                           ("a $({ case x in x) y;; esac; }) b", "a $SUBST b"),
                           ("a $(echo x\ncase y in y) z;; esac) b", "a $SUBST b"),
                           ("a $(echo x | case y in y) z;; esac) b", "a $SUBST b"),
+                          ("a `b \\$x` c", "a $SUBST c"),
                           ("a $(echo x & case y in y) z;; esac) b", "a $SUBST b"),
                           ("a $(case x in x) echo esac;; y) z;; esac) b", "a $SUBST b"),
                           ("a $(case a in a) (case b in b) x;; esac);; c) y;; esac) b", "a $SUBST b"),
@@ -1071,6 +1157,10 @@ def self_test():
                                    (("new", "all"), "a \"${x:-'}'}\" ; b", ["a \"${x:-'}'}\" ", " b"]),
                                    (("new", "pattern"), "a \"${x:-${y#'}'}}\" ; b", ["a \"${x:-${y#'}'}}\" ", " b"]),
                                    (("main", "all"), "a $(case x in x) b;; esac) ; c", ["a $(case x in x) b;; esac) ", " c"]),
+                                   (("new", "all"), "a `b; c` ; d", ["a `b; c` ", " d"]),
+                                   (("new", "all"), 'a "x `echo "b ; c"` y" ; d', ['a "x `echo "b ; c"` y" ', " d"]),
+                                   (("main", "all"), "a `b; c` ; d", ["a `b", " c` ", " d"]),  # main's split, kept
+                                   (("main", "all"), 'a "x `echo "b ; c"` y" ; d', ['a "x `echo "b ', ' c"` y" ', " d"]),
                                    (("main", "all"), 'a "$( (echo a)# x)\n echo "y ; z" )" ; c',
                                     ['a "$( (echo a)# x)\n echo "y ', ' z" )" ', " c"]),  # main's reading, kept as it was
                                    (("new", "all"), 'a "$( (echo a)# x)\n echo "y ; z" )" ; c',
@@ -1083,6 +1173,55 @@ def self_test():
             if got != want:
                 problems.append(f"pieces({raw!r}) under {reading} = {got!r}, expected {want!r}")
         commands("echo \"${x:-'}'}\"", "/")
+        for raw, want in (("a $(b) `c` \"$(d \"$(e)\")\" '$(f)'", ["b", "c", 'd "$(e)"']),
+                          ("a `b \\`c\\` \\\\ \\$d`", ["b `c` \\ $d"]), ("a $((1 + $(b)))", ["b"]), ("a $(b", [])):
+            if split_substitutions(raw)[1] != want:
+                problems.append(f"split_substitutions({raw!r}) bodies = {split_substitutions(raw)[1]!r}, expected {want!r}")
+        if body_substitutions("a $(b) `c` \\$(d) $((1+$(e))) 'f $(g)' $((h); i)") != ["$(b)", "`c`", "$(e)", "$(g)", "$((h); i)"]:
+            problems.append(f"body_substitutions: {body_substitutions('a $(b) `c` \\$(d) $((1+$(e))) f $(g)')!r}")
+        for reading, want in ((("new", "all"), "a $SUBST d"), (("main", "all"), "a $((b); c) d")):
+            try:
+                READING = reading
+                got = split_substitutions("a $((b); c) d")
+            finally:
+                READING = ("new", "all")
+            if got != (want, ["(b); c"]):
+                problems.append(f"split_substitutions('a $((b); c) d') under {reading} = {got!r}")
+        for reading, want in ((("new", "all"), "a $SUBST e"), (("main", "all"), "a $((b $SUBST); d) e")):
+            try:
+                READING = reading
+                got = split_substitutions("a $((b $(c)); d) e")[0]
+            finally:
+                READING = ("new", "all")
+            if got != want:
+                problems.append(f"split_substitutions('a $((b $(c)); d) e') text under {reading} = {got!r}")
+        for name, cmd in (("unclosed $( in a heredoc body", "cat <<EOF\n" + "$(' " * 6000 + "\nEOF\ngit push origin main"),
+                          ("nested $((", "echo " + "$((" * 6000 + "1" + "))" * 6000 + "; git push origin main"),
+                          ("nested $(( in a heredoc body", "cat <<EOF\n" + "$((" * 6000 + "1" + "))" * 6000 + "\nEOF")):
+            started = time.time()  # each takes well under a second; a rescan per `$(` or `$((` takes 18 s or more
+            commands(cmd, "/")
+            if time.time() - started > 5:
+                problems.append(f"commands: {name} took {time.time() - started:.0f} s (a rescan per one is quadratic)")
+        nested = "x"
+        for k in range(1200):
+            nested = f"cat <<E{k}\n$(" + nested + f"\n)\nE{k}"
+        try:  # nested heredocs in substitutions: stripped to MAX_NEST deep, not to Python's recursion limit
+            READING = ("new", "all")
+            strip_heredocs(nested)
+        except RecursionError:
+            problems.append("strip_heredocs: no MAX_NEST bound on heredocs inside a body's substitutions")
+        finally:
+            READING = ("new", "all")
+        try:  # the command after a heredoc whose body runs a substitution, in a new reading alone
+            READING = ("new", "all")
+            after = [w for _, w in commands_read("cat <<EOF\n$(echo hi)\nEOF\ngit checkout -b wip", "/")]
+        finally:
+            READING = ("new", "all")
+        if ["git", "checkout", "-b", "wip"] not in after or [":", "$SUBST"] not in after:
+            problems.append(f"strip_heredocs: new reading of a heredoc with a substitution = {after!r}")
+        deep = "echo " + "$(true " * MAX_NEST + "$(git checkout -b wip)" + ")" * MAX_NEST
+        if any(w[:3] == ["git", "checkout", "-b"] for _, w in commands(deep, "/")):
+            problems.append("commands: substitutions read deeper than MAX_NEST")
         if READINGS[0] != ("main", "all"):
             problems.append("READINGS: main's reading must run first (a recording cap must never drop its commands)")
         real_scan_end, real_main = scan_end, scan_end_main
@@ -1192,6 +1331,33 @@ def self_test():
                  ("git push origin $(echo if case in point) main", True),
                  ("git push origin $(echo do case in point) main", True),  # only the new reading finds this one
                  ("echo $(echo then case in x) git checkout -b wip)", True),  # main's reading still applies
+                 ("echo $(git push origin main)", True), ("echo `git push origin main`", True),
+                 ("x=$(git checkout -b wip)", True), ('echo "$(git checkout -b wip)"', True), ('echo "`git checkout -b wip`"', True),
+                 ("echo $(echo $(git push origin main))", True), ("echo `echo \\`git push origin main\\``", True),
+                 ("echo $(( $(git push origin main) + 1 ))", True), ("echo $(cd sub && git checkout -b wip)", True),
+                 ("echo `x; git checkout -b wip`", True), ('echo "a `x; git checkout -b wip` b"', True),
+                 ("echo " + "$(true " * 7 + "$(git checkout -b wip)" + ")" * 7, True),
+                 ("echo '$(git push origin main)'", False), ("echo '`git checkout -b wip`'", False),
+                 ('echo "\\$(git push origin main)"', False), ('echo "\\`git checkout -b wip\\`"', False),
+                 ("x=$(git rev-parse --abbrev-ref HEAD); echo `git branch --show-current`", False),
+                 ("git push origin $(git branch --show-current)", False),
+                 ('gh pr create --title "x" --body "$(cat <<EOF\nBranch: $(git branch --show-current)\n'
+                  'Then run `git push origin main` to publish.\nEOF\n)"', True),
+                 ("cat <<EOF\nit's $(git checkout -b wip)\nEOF", True), ("cat <<-EOF\n\t`git checkout -b wip`\n\tEOF", True),
+                 ("cat <<'EOF'\n$(git checkout -b wip)\nEOF", False), ('cat <<"EOF"\n$(git checkout -b wip)\nEOF', False),
+                 ("cat <<\\EOF\n$(git checkout -b wip)\nEOF", False), ("cat <<EOF\n\\$(git checkout -b wip)\nEOF", False),
+                 ("cat <<EOF\n$((1+2)) and `echo ok`\nEOF\ngit checkout -b aps-3-ok", False),
+                 ("x=$(cat <<EOF\nhi\nEOF\ngit checkout -b wip\n)", True),
+                 ("echo $((git checkout -b wip); true)", True), ("echo $(( (1+2) ))", False),
+                 ("cat <<EOF\n$(git checkout -b wip $(echo x))\nEOF", True),
+                 ("cat <<EOF\n$(echo hi)\nEOF\ngit checkout -b wip", True),
+                 ("cat <<EOF\n`echo \\\\'`\nEOF\ngit push origin $(time case a in) main", True),  # main's reading, as main
+                 ("cat <<EOF\n$(cat <<'X'\ngit push origin main\nX\n)\nEOF", False),
+                 ("cat <<EOF\n$(cat <<EOF2\n$(git push origin main)\nEOF2\n)\nEOF", True),
+                 ("cat <<EOF\n$(echo a) $( '\n$(git checkout -b wip)\nEOF", True),  # read on: the scanner may be wrong
+                 ("cat <<EOF\n$(time case a in) $(git push origin main)\nEOF", True),  # dash runs this push
+                 ("echo " + "$((1)) " * 2000 + "$((git push origin main); true)", True),  # a long text keeps its budget
+                 ("cat <<EOF\n`echo a` ` b\n$(git checkout -b wip)\nEOF", False),
                  ('n=$(echo if case in point); echo "$(echo "x; git checkout -b wip")"', False), ('git push "${x:-")"}" :main', True),
                  ('git push $(echo "${x:-$(echo a\n)}") "${x:-")"}" :main', True), ('echo "${x:-"}"}" ; git push origin main', True), ('echo "$((echo ")"))" ; git push origin main', True),
                  ("git checkout -b \"x-$(echo ')' -C y)\" main", False), ("git push origin `echo x main", True), ("sudo -u root git checkout -b wip", True),
@@ -1223,6 +1389,12 @@ def self_test():
         subprocess.run(["git", "-C", str(repo), "checkout", "-q", "main"], check=True)
         if denied(bash("git push --all", cwd=other)):
             problems.append("no_push applied to a repo without a rule")
+        if not denied(bash(f"x=$(cd {other} && pwd); git checkout -b wip")):
+            problems.append("branch gate: a cd inside a substitution moved the outer command")
+        if denied(bash(f"cd {other} && echo $(git checkout -b wip)")):
+            problems.append("branch gate: a substitution's command checked in the wrong directory")
+        if not any("`a" in w for _, w in commands("echo `a; b`", "/")):
+            problems.append("commands: main's reading skipped for a command with backticks only")
         if denied(bash("git checkout -b anything", cwd=other)):
             problems.append("branch gate applied to a repo without a rule")
         if denied(bash(f"git -C {other} checkout -b feature/x")) or \
@@ -1239,14 +1411,16 @@ def self_test():
                   "git commit -qm x 2>&1 | tail -3", 'echo "$(date) <<EOF"\ngit commit -qm x',
                   'git commit -m "$(cat <<\'EOF\'\nFix parser (APS-66)\n\nRefuse "x\nEOF\n)" && git commit -qm y',
                   "echo $((1 << 2))\ngit commit -qm x", f"git -C {repo} \\\n  commit -qm x", "gh pr checkout 3",
-                  "gh pr merge 3 -sd"]
+                  "gh pr merge 3 -sd", "echo $(git commit -qm x)", "x=`git add -A`", 'echo "$(git stash)"',
+                  "cat <<EOF\n$(git commit -qm x)\nEOF"]
         for cmd in writes:
             start = tmp if cmd.startswith(("cd ", f"(cd {repo}", "pushd", "git -C")) else repo
             if not denied(bash(cmd, cwd=start)):
                 problems.append(f"review gate: write allowed: {cmd!r}")
         reads = ["git status", "git diff main", "git log -1", "git fetch -q origin", "git stash list",
                  "git apply --check p.diff", "git clean -n", "git clean -nd", "git worktree add ../w2 -b aps-5-ok main",
-                 f"(cd {repo} && git status) && git -C {other} commit -qm x", "gh pr merge 3 --squash"]
+                 f"(cd {repo} && git status) && git -C {other} commit -qm x", "gh pr merge 3 --squash",
+                 f"echo $(git -C {other} commit -qm x) $(git status)", "echo '$(git commit -qm x)'"]
         for cmd in reads:
             if denied(bash(cmd)):
                 problems.append(f"review gate: read or other tree denied: {cmd!r}")
