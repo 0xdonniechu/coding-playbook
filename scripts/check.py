@@ -39,7 +39,7 @@ failures = []
 # copies with SWITCH_MODEL_SELF_TEST set: a copy differs from this tree only in the files a model switch edits, so there
 # the script self-tests (same code, already run by the outer run) are skipped and the file and consistency checks run.
 SELF_TESTS = [("scripts/switch-model.py", False, None), ("scripts/sdlc-check.py", False, None), ("loop/loop-stop.py", False, 600),
-              ("graph/graph-hook.py", False, 600), ("scripts/plane.py", False, None), ("hooks/agent-guard.py", True, None),
+              ("graph/graph-hook.py", False, 600), ("gates/session-gates.py", False, None), ("scripts/plane.py", False, None), ("hooks/agent-guard.py", True, None),
               ("scripts/dispatch.py", False, None), ("loop/loop.py", False, 600), ("loop/loop-wake.py", False, 600), ("saveit/saveit-hook.py", False, None),
               ("scripts/progress-diagram.py", False, None), ("scripts/sync-public.py", False, None), ("scripts/github-boundary.py", True, None),
               ("guard/owner-token-guard.py", True, None), ("scripts/switch-test.py", False, None),
@@ -370,18 +370,21 @@ with tempfile.TemporaryDirectory() as home:
     hooks = json.loads((claude / "settings.json").read_text(encoding="utf-8")).get("hooks", {})
     commands = {event: [h.get("command") for e in hooks.get(event, []) for h in e.get("hooks", [])] for event in hooks}
     stop_timeouts = [h.get("timeout") for e in hooks.get("Stop", []) for h in e.get("hooks", [])]
-    want = {"PreToolUse": ['python3 "$HOME/.claude/hooks/owner-token-guard/owner-token-guard.py"'],
+    want = {"PreToolUse": ['python3 "$HOME/.claude/hooks/owner-token-guard/owner-token-guard.py"',
+                           'python3 "$HOME/.claude/hooks/gates/session-gates.py" pre-tool || true'],
             "SessionStart": ["other-tool session-start", 'python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" session-start || true',
                              'python3 "$HOME/.claude/hooks/graph/graph-hook.py" session-start || true'],
             "SessionEnd": ['python3 "$HOME/.claude/hooks/graph/graph-hook.py" session-end || true'],
             "PreCompact": ['python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" pre-compact || true'],
             "Stop": ['python3 "$HOME/.claude/hooks/loop/loop-stop.py" || true'],
-            "SubagentStop": ['python3 "$HOME/.claude/hooks/loop/loop-stop.py" subagent-stop || true']}
+            "SubagentStop": ['python3 "$HOME/.claude/hooks/loop/loop-stop.py" subagent-stop || true',
+                             'python3 "$HOME/.claude/hooks/gates/session-gates.py" subagent-stop || true']}
     if [r.returncode for r in runs] != [0, 0, 0] or commands != want or "installed  " + str(claude / "settings.json") in runs[1].stdout \
             or stop_timeouts != [1800] \
             or not (claude / "hooks" / "saveit" / "saveit-hook.py").is_file() \
             or not (claude / "hooks" / "loop" / "loop-stop.py").is_file() \
-            or not (claude / "hooks" / "graph" / "graph-hook.py").is_file():
+            or not (claude / "hooks" / "graph" / "graph-hook.py").is_file() \
+            or not (claude / "hooks" / "gates" / "session-gates.py").is_file():
         fail(f"install.py --settings session hooks: expected {want} registered once, the second run unchanged and --check clean; "
              f"got exits {[r.returncode for r in runs]}, {commands}")
 

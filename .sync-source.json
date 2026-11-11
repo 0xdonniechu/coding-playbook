@@ -1,7 +1,8 @@
 {
-  "internal_commit": "96badc0",
+  "internal_commit": "6926201",
   "reviewed": {
-    "CLAUDE.md": "96badc0",
-    "README.md": "96badc0"
+    ".claude/branch-name.json": "6926201",
+    "CLAUDE.md": "6926201",
+    "README.md": "6926201"
   }
 }

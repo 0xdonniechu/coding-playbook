@@ -88,6 +88,8 @@ LOOP_COMMAND = 'python3 "$HOME/.claude/hooks/loop/loop-stop.py" || true'
 LOOP_REVIEW_COMMAND = 'python3 "$HOME/.claude/hooks/loop/loop-stop.py" subagent-stop || true'
 # The session graph (APS-57): SessionEnd only starts a detached refresh (Claude Code gives it a short budget).
 GRAPH_COMMAND = 'python3 "$HOME/.claude/hooks/graph/graph-hook.py" {mode} || true'
+# Session gates (APS-66): branch names, trees a running subagent read, lesson recall. Mistake guards: `|| true`.
+GATES_COMMAND = 'python3 "$HOME/.claude/hooks/gates/session-gates.py" {mode} || true'
 SESSION_HOOKS = [
     ("owner-token guard hook", "PreToolUse",
      {"matcher": "Bash|Read|Grep|Glob", "hooks": [{"type": "command", "command": GUARD_COMMAND}]}),
@@ -106,6 +108,11 @@ SESSION_HOOKS = [
      {"hooks": [{"type": "command", "command": GRAPH_COMMAND.format(mode="session-end"), "timeout": 10}]}),
     ("session graph SessionStart hook", "SessionStart",
      {"hooks": [{"type": "command", "command": GRAPH_COMMAND.format(mode="session-start"), "timeout": 10}]}),
+    ("session gates PreToolUse hook", "PreToolUse",
+     {"matcher": "Bash|Edit|Write|NotebookEdit|MultiEdit|Read|Grep|Glob",
+      "hooks": [{"type": "command", "command": GATES_COMMAND.format(mode="pre-tool"), "timeout": 30}]}),
+    ("session gates SubagentStop hook", "SubagentStop",
+     {"hooks": [{"type": "command", "command": GATES_COMMAND.format(mode="subagent-stop"), "timeout": 10}]}),
 ]
 # Global instructions, between markers, keeping everything else in the file byte for byte. Read and checked here,
 # before anything is written, so a refusal leaves the machine as it was; written further down.
@@ -183,6 +190,7 @@ install_file(ROOT / "saveit" / "saveit-hook.py", HOME / "hooks" / "saveit" / "sa
 install_file(ROOT / "loop" / "loop-stop.py", HOME / "hooks" / "loop" / "loop-stop.py")
 install_file(ROOT / "loop" / "loop-wake.py", HOME / "hooks" / "loop" / "loop-wake.py")  # its timer: loop-wake.py install
 install_file(ROOT / "graph" / "graph-hook.py", HOME / "hooks" / "graph" / "graph-hook.py")
+install_file(ROOT / "gates" / "session-gates.py", HOME / "hooks" / "gates" / "session-gates.py")
 
 # Agents
 for src in sorted((ROOT / "rores" / "agents").glob("*.md")):
