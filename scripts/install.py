@@ -6,13 +6,14 @@
   python scripts/install.py --global   also put rores/global/CLAUDE.md into ~/.claude/CLAUDE.md, between markers
   python scripts/install.py --settings also merge rores/global/settings-defaults.json (enabledPlugins, skillOverrides)
                                        into ~/.claude/settings.json and register the session hooks (owner-token guard,
-                                       save-it SessionStart and PreCompact, the loop's Stop, the session graph's
-                                       SessionEnd and SessionStart), backing it up first
+                                       save-it SessionStart and PreCompact, the loop's Stop and SubagentStop, the
+                                       session graph's SessionEnd and SessionStart), backing it up first
   python scripts/install.py --check    change nothing; exit 1 if the installed copy differs from this repo
   python scripts/install.py --help     print this and change nothing; any other argument: exit 2, nothing written
 
 settings.json is written only with --settings, and only the entries listed in rores/global/settings-defaults.json
-and the session hooks (each appended once to its event's list); every other key keeps its value.
+and the session hooks (each appended once to its event's list; the timeout of one already there is brought to this
+repo's); every other key keeps its value.
 The model and effort there stay the owner's: they are only reported.
 With --settings (also under --check) it refuses, exit 2 and nothing written, when settings.json is not a
 UTF-8 JSON object, its enabledPlugins or skillOverrides is not an object, or a hooks event it registers is not a list.
@@ -84,6 +85,7 @@ GUARD_COMMAND = 'python3 "$HOME/.claude/hooks/owner-token-guard/owner-token-guar
 SAVEIT_COMMAND = 'python3 "$HOME/.claude/hooks/saveit/saveit-hook.py" {mode} || true'
 # `|| true` here too: exit 2 from a Stop hook would keep the session going.
 LOOP_COMMAND = 'python3 "$HOME/.claude/hooks/loop/loop-stop.py" || true'
+LOOP_REVIEW_COMMAND = 'python3 "$HOME/.claude/hooks/loop/loop-stop.py" subagent-stop || true'
 # The session graph (APS-57): SessionEnd only starts a detached refresh (Claude Code gives it a short budget).
 GRAPH_COMMAND = 'python3 "$HOME/.claude/hooks/graph/graph-hook.py" {mode} || true'
 SESSION_HOOKS = [
@@ -94,8 +96,12 @@ SESSION_HOOKS = [
     ("save-it PreCompact hook", "PreCompact",
      {"hooks": [{"type": "command", "command": SAVEIT_COMMAND.format(mode="pre-compact"), "timeout": 30}]}),
     # The one-prompt loop (APS-56): holds a session only while it has a running run file (loop/loop.py start).
+    # Its judge runs the plan's checks before a run is done (APS-58), so the hook gets 1800 s, not 60.
     ("one-prompt loop Stop hook", "Stop",
-     {"hooks": [{"type": "command", "command": LOOP_COMMAND, "timeout": 60}]}),
+     {"hooks": [{"type": "command", "command": LOOP_COMMAND, "timeout": 1800}]}),
+    # Records what a reviewer or hard-reviewer run returned in the session's open run (APS-58).
+    ("one-prompt loop SubagentStop hook", "SubagentStop",
+     {"hooks": [{"type": "command", "command": LOOP_REVIEW_COMMAND, "timeout": 30}]}),
     ("session graph SessionEnd hook", "SessionEnd",
      {"hooks": [{"type": "command", "command": GRAPH_COMMAND.format(mode="session-end"), "timeout": 10}]}),
     ("session graph SessionStart hook", "SessionStart",
@@ -240,11 +246,22 @@ else:
     for label, event, entry in SESSION_HOOKS:
         command = entry["hooks"][0]["command"]
         existing = data.get("hooks", {}).get(event, [])
-        registered = any(isinstance(e, dict) and isinstance(e.get("hooks"), list)
-                         and any(isinstance(h, dict) and h.get("command") == command for h in e["hooks"])
-                         for e in existing)
-        if registered:
+        mine = [h for e in existing if isinstance(e, dict) and isinstance(e.get("hooks"), list)
+                for h in e["hooks"] if isinstance(h, dict) and h.get("command") == command]
+        registered = bool(mine)
+        want = entry["hooks"][0].get("timeout")
+        stale = [h for h in mine if want is not None and h.get("timeout") != want]  # registered with an older timeout
+        if registered and not stale:
             print(f"unchanged  {settings} ({label})")
+        elif registered and check_only:
+            differs.append(f"{settings} ({label} timeout)")
+            print(f"differs    {settings} ({label}: timeout {stale[0].get('timeout')}, this repo's is {want}; run with --settings)")
+        elif registered and not with_settings:
+            print(f"skipped    {settings} ({label}: timeout {stale[0].get('timeout')}, this repo's is {want}; run with --settings)")
+        elif registered:
+            for h in stale:
+                h["timeout"] = want
+            changes.append(f"{label} timeout {want}")
         elif check_only:
             differs.append(f"{settings} ({label})")
             print(f"differs    {settings} ({label} not registered; run with --settings)")

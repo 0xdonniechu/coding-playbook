@@ -2,7 +2,7 @@
 """Checks the sdlc chain's artifacts (APS-51).
 
     python3 scripts/sdlc-check.py clarify <intent.md>
-    python3 scripts/sdlc-check.py converge <plan.md> [--base <ref>]
+    python3 scripts/sdlc-check.py converge <plan.md> [--base <ref>] [--checks]
     python3 scripts/sdlc-check.py --self-test
 
 `clarify` fails while the intent still has a `[NEEDS CLARIFICATION: …]` marker, or its `## Open questions` section
@@ -15,16 +15,24 @@ is missing or does not begin with `None`. Run it before the intent goes to `appr
   - a task, not marked `not needed`, whose `allow` matches no changed path;
   - a Proof item with no Result item, or a Result item that does not begin with PASS, FAIL or `not run: <reason>`.
 A plan with no `## Tasks` section has nothing to compare: it is reported and passes, so older plans stay valid.
+With `--checks`, and only once nothing else is missing, it also runs each distinct `check:` command of the tasks that
+are needed, through the shell at the work tree's top, in the plan's order (`SDLC_CHECK_TIMEOUT` seconds each, default
+900; `SDLC_CHECKS_TOTAL` seconds for all of them, default 1500); a non-zero exit, a timeout (the check's whole process
+group is killed) or no time left is the gap `check failed: …`. The one-prompt loop's Stop hook judges with it, so
+"done" means the checks passed just now, not that someone wrote PASS. A heavy check carries its own memory cap.
 
 The formats are in the sdlc skill (`skills/sdlc/SKILL.md`). `dispatch.py --task` reads tasks with `parse_tasks`
 here. Exit 0: pass; 1: a gap or a marker; 2: the file cannot be read as the format says (nothing is guessed).
-It never edits a file. Standard library only.
+It never edits a file; with `--checks` the plan's commands run as written. Standard library only.
 """
 import importlib.util
+import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -175,7 +183,54 @@ def changed_paths(top, base):
     return base, sorted(p for p in paths if p)
 
 
-def converge(plan_path, base=None):
+def run_checks(tasks, top):
+    """(notes, gaps) from running each distinct check of the live tasks once, in the plan's order."""
+    def seconds(name, default):
+        try:
+            return max(1, int(os.environ.get(name, default)))
+        except ValueError:
+            return default
+
+    limit, total = seconds("SDLC_CHECK_TIMEOUT", 900), seconds("SDLC_CHECKS_TOTAL", 1500)
+    started = time.monotonic()
+    notes, gaps, seen = [], [], {}
+    for t in tasks:
+        if t["not_needed"]:
+            continue
+        for cmd in t["checks"]:
+            if cmd in seen:
+                continue
+            seen[cmd] = t["id"]
+            left = int(total - (time.monotonic() - started))
+            if left < 1:
+                gaps.append(f"check failed: {t['id']} `{cmd}` not run: the checks' total time ({total} s) is used up")
+                continue
+            mine = min(limit, left)
+            # its own process group, so a timeout kills what the command started too, not only the shell
+            proc = subprocess.Popen(cmd, shell=True, cwd=top, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                    errors="replace", stdin=subprocess.DEVNULL, start_new_session=True)
+            try:
+                output = proc.communicate(timeout=mine)[0]
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    proc.kill()
+                try:
+                    proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:  # something left the group and holds the output: do not wait for it
+                    pass
+                gaps.append(f"check failed: {t['id']} `{cmd}` took over {mine} s")
+                continue
+            if proc.returncode != 0:
+                tail = " ".join(output.split())[-300:]
+                gaps.append(f"check failed: {t['id']} `{cmd}` (exit {proc.returncode}): {tail}")
+            else:
+                notes.append(f"check passed: {t['id']} `{cmd}`")
+    return notes, gaps
+
+
+def converge(plan_path, base=None, checks=False):
     """(notes, gaps) for a plan file in a git work tree."""
     plan_path = Path(plan_path).resolve()
     text = plan_path.read_text(encoding="utf-8")
@@ -212,6 +267,9 @@ def converge(plan_path, base=None):
             notes.append(f"proof {n} recorded FAIL")
     for n in sorted(set(result) - set(proof)):
         gaps.append(f"result {n} has no proof item")
+    if checks and not gaps:  # only once nothing else is missing: the checks are the last, and the slow, step
+        more_notes, gaps = run_checks(tasks, top)
+        notes += more_notes
     return notes, gaps
 
 
@@ -301,6 +359,48 @@ def self_test():
                ["result 2 does not begin with PASS, FAIL or `not run: <reason>`: 'done'", "result 3 has no proof item"])
         expect("converge notes", [n for n in notes if not n[0].isdigit()],
                ["T3 not needed: merged into T2", "proof 1 recorded FAIL"])
+        # --checks: the commands run only when nothing else is missing, once per distinct command, at the top
+        ran = repo / "ran.log"
+        ok = f"echo x >> {ran.name}"
+        checked = (f"## Tasks\n### T1 (builder) A\n- allow: `src/**`\n- forbid: `src/secret.py`\n- check: `{ok}`\n"
+                   f"### T2 (main) B\n- allow: `docs/*.md` `ran.log`\n- check: `{ok}`\n- check: `%s`\n")
+        done = proof + "## Result\n1. PASS\n2. PASS\n"
+        plan.write_text(checked % "true" + done)
+        expect("no --checks runs nothing", (converge(plan)[1], ran.exists()), ([], False))
+        notes, gaps = converge(plan, checks=True)
+        expect("checks pass, each distinct command once", (gaps, ran.read_text(), sum(n.startswith("check passed") for n in notes)),
+               ([], "x\n", 2))
+        plan.write_text(checked % "echo broken; exit 3" + done)
+        expect("a failing check is a gap", converge(plan, checks=True)[1], ["check failed: T2 `echo broken; exit 3` (exit 3): broken"])
+        os.environ["SDLC_CHECK_TIMEOUT"] = "1"
+        plan.write_text(checked % "sleep 5" + done)
+        expect("a check over its time is a gap", converge(plan, checks=True)[1], ["check failed: T2 `sleep 5` took over 1 s"])
+        left = repo / "left.log"
+        plan.write_text(checked % f"(sleep 3; echo late > {left.name}) & sleep 5" + done)
+        converge(plan, checks=True)
+        time.sleep(3.5)
+        expect("a timeout kills what the check started, not only the shell", left.exists(), False)
+        del os.environ["SDLC_CHECK_TIMEOUT"]
+        os.environ["SDLC_CHECKS_TOTAL"] = "2"
+        plan.write_text(checked % "true" + f"### T3 (main) C\n- allow: `ran.log`\n- check: `sleep 2; true`\n### T4 (main) D\n- allow: `ran.log`\n- check: `echo never`\n" + done)
+        gaps = converge(plan, checks=True)[1]
+        expect("the checks share one total time", [g.split("`")[2].strip()[:22] for g in gaps], ["took over 1 s", "not run: the checks' t"])
+        del os.environ["SDLC_CHECKS_TOTAL"]
+        before = ran.read_text()
+        plan.write_text(checked % "true" + proof + "## Result\n1. PASS\n")
+        expect("another gap: the checks do not run", (converge(plan, checks=True)[1], ran.read_text()), (["proof 2 has no result"], before))
+        plan.write_text(checked % "true" + f"### T3 (main) C\n- allow: `web/**`\n- check: `echo y >> {ran.name}`\n"
+                        "- not needed: dropped\n" + done)
+        ran.unlink()
+        converge(plan, checks=True)
+        expect("a task that is not needed runs no check", ran.read_text(), "x\n")
+        ran.unlink()
+        cli = lambda *a: subprocess.run([sys.executable, __file__, *a], capture_output=True, text=True, cwd=tmp)
+        out = cli("converge", str(plan), "--checks", "--base", "main")
+        expect("cli --checks with --base in either order", (out.returncode, out.stdout.splitlines()[-1][:14], ran.exists()), (0, "PASS: converge", True))
+        expect("cli unknown option", cli("converge", str(plan), "--check").returncode, 2)
+        expect("cli --base without a value", cli("converge", str(plan), "--base").returncode, 2)
+        ran.unlink()
         old = repo / "intent" / "old.plan.md"
         old.write_text("## Steps\n1. x\n## Proof\n1. y\n")
         expect("converge old plan", converge(old)[1], [])
@@ -308,7 +408,7 @@ def self_test():
     if failures:
         print("FAIL: sdlc-check self-test\n  " + "\n  ".join(failures))
         return 1
-    print("PASS: sdlc-check self-test (clarify, the task parser and its refusals, converge on a scratch repo)")
+    print("PASS: sdlc-check self-test (clarify, the task parser and its refusals, converge and --checks on a scratch repo)")
     return 0
 
 
@@ -317,8 +417,16 @@ def main(argv):
         return self_test()
     if len(argv) == 2 and argv[0] == "clarify":
         cmd = "clarify"
-    elif argv[:1] == ["converge"] and (len(argv) == 2 or (len(argv) == 4 and argv[2] == "--base")):
-        cmd = "converge"
+    elif argv[:1] == ["converge"] and len(argv) >= 2 and not argv[1].startswith("--"):
+        cmd, base, checks, rest = "converge", None, False, argv[2:]
+        while rest:
+            if rest[0] == "--checks" and not checks:
+                checks, rest = True, rest[1:]
+            elif rest[0] == "--base" and base is None and len(rest) >= 2:
+                base, rest = rest[1], rest[2:]
+            else:
+                print(__doc__.strip(), file=sys.stderr)
+                return 2
     else:
         print(__doc__.strip(), file=sys.stderr)
         return 2
@@ -327,7 +435,7 @@ def main(argv):
             gaps = clarify(Path(argv[1]).read_text(encoding="utf-8"))
             notes = []
         else:
-            notes, gaps = converge(argv[1], argv[3] if len(argv) == 4 else None)
+            notes, gaps = converge(argv[1], base, checks)
     except (Malformed, OSError, UnicodeDecodeError) as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2

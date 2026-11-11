@@ -154,11 +154,15 @@ When the owner gives a goal and asks for it to be carried to done, the chain run
   intent and plan (record it in the status lines).
 - Start the run on the plan with the loop tool the global instructions name. From then on, each time the session
   would stop, a Stop hook runs `converge` and hands back what is left (a task untouched, a proof item without a
-  result, a FAIL result) as the next work. Do the next item; do not stop to report progress.
-- Record each review verdict with the tool's `pass` or `fail`. The second FAIL of one task ends the run: stop and
-  report with the numbered issues. A question only the owner can answer ends it too (the tool's `ask`).
+  result, a FAIL result, a `check:` command that fails when the hook runs it) as the next work. Do the next item; do
+  not stop to report progress.
+- A review verdict comes from the reviewer agent: a hook records what it returned, and the tool's `pass` is refused
+  without a reviewer PASS on record. Record every reviewer FAIL with the tool's `fail`. The second FAIL of one task, or the third
+  round of failing checks, ends the run: stop and report with the numbered issues. A question only the owner can
+  answer ends it too (the tool's `ask`). Name the ticket in the plan (`Plane <KEY-N>`): a run that closes needing the
+  owner comments there.
 - Fill `## Result` as proof runs: PASS with numbers, FAIL, or `not run: <reason>`. When `converge` finds nothing
-  left, the run closes as done; end with the usual summary.
+  left and the checks pass, the run closes as done; end with the usual summary.
 
 ## Evals: regression for the process
 
