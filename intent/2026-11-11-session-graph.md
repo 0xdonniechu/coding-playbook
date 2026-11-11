@@ -1,5 +1,5 @@
 ---
-status: shipped (ambysto/coding-playbook PR #55, here PR #13; owner 2026-11-11: "Chủ động merge & clean worktree; sau mỗi khi kết thúc phiên làm việc thì cập nhật graph 1 lần"; plan intent/2026-11-11-session-graph.plan.md) # draft → approved → planned → building → verified → shipped (PR #n)
+status: shipped (PR #55; owner 2026-11-11: "Chủ động merge & clean worktree; sau mỗi khi kết thúc phiên làm việc thì cập nhật graph 1 lần"; plan intent/2026-11-11-session-graph.plan.md) # draft → approved → planned → building → verified → shipped (PR #n)
 ---
 # The architecture graph is refreshed when a session ends, and the next session reads it; merges happen on their own
 

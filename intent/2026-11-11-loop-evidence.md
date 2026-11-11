@@ -1,5 +1,5 @@
 ---
-status: shipped (ambysto/coding-playbook PR #56, here PR #14; owner 2026-11-11: "tìm cách giải quyết những issue này một cách nhẹ nhàng, đơn giản và hiệu quả"; plan intent/2026-11-11-loop-evidence.plan.md) # draft → approved → planned → building → verified → shipped (PR #n)
+status: shipped (PR #56; owner 2026-11-11: "tìm cách giải quyết những issue này một cách nhẹ nhàng, đơn giản và hiệu quả"; plan intent/2026-11-11-loop-evidence.plan.md) # draft → approved → planned → building → verified → shipped (PR #n)
 ---
 # A one-prompt run is done on evidence, not on the agent's word, and tells the owner when it needs them
 

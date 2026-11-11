@@ -20,10 +20,13 @@ Subagents return concise summaries, never full file dumps: builder and transcrib
 Small tasks (1-2 files, obvious change) are done directly, not dispatched.
 
 ## Task rating (do this before dispatching)
-Rate on four axes: ambiguity, coupled decisions, verifiability, cost of error.
+Rate on four axes: ambiguity, coupled decisions, verifiability, cost of error. Judge the cost of error by what undoing it takes, never by how sure the model is (owner decision 2026-11-11):
+- One-click undo (docs, tests, one function: a revert fixes it): low.
+- Cleanup undo (shared helpers, an interface other code calls, rules every session acts on: a revert leaves work or decisions to redo): high.
+- No undo: **HARD**, whatever the other axes say. User data lost or migrated (schema migrations included), auth or any other security boundary weakened, money moved, something published or sent, and anything else no revert takes back (a force push, a production setting, a deletion).
 - All low → **EASY**: transcriber or builder, no review.
 - One high → **MEDIUM**: builder, then reviewer.
-- Two or more high, **or** an error could lose user data, break security, move money or cannot be undone → **HARD**: the main session does it directly, then hard-reviewer reviews it.
+- Two or more high, **or** no undo → **HARD**: the main session does it directly, then hard-reviewer reviews it.
 Each project's CLAUDE.md lists its own HARD / MEDIUM / EASY examples; those override this default.
 
 ## The loop
