@@ -156,8 +156,11 @@ When the owner gives a goal and asks for it to be carried to done, the chain run
   would stop, a Stop hook runs `converge` and hands back what is left (a task untouched, a proof item without a
   result, a FAIL result, a `check:` command that fails when the hook runs it) as the next work. Do the next item; do
   not stop to report progress.
-- A review verdict comes from the reviewer agent: a hook records what it returned, and the tool's `pass` is refused
-  without a reviewer PASS on record. Record every reviewer FAIL with the tool's `fail`. The second FAIL of one task, or the third
+- A review verdict comes from the reviewer agent. Its prompt for the run's own plan has, anywhere, a line of its own
+  that reads `loop task: T<n>`, or for two tasks `loop tasks: T1, T2`. A hook records what the reviewer returned for
+  each task named, and the tool's `pass` is refused without that task's reviewer PASS on record. A review of other
+  work gets no such line: its verdict counts for nothing and neither holds nor passes the run. A FAIL of two tasks is
+  one FAIL for each: record it with the tool's `fail` once per task. Record every reviewer FAIL with the tool's `fail`. The second FAIL of one task, or the third
   round of failing checks, ends the run: stop and report with the numbered issues. A question only the owner can
   answer ends it too (the tool's `ask`). Name the ticket in the plan (`Plane <KEY-N>`): a run that closes needing the
   owner comments there.

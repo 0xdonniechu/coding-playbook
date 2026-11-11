@@ -181,6 +181,7 @@ for name in sorted(json.loads((ROOT / "hooks" / "pin.json").read_text(encoding="
 install_file(ROOT / "guard" / "owner-token-guard.py", HOME / "hooks" / "owner-token-guard" / "owner-token-guard.py")
 install_file(ROOT / "saveit" / "saveit-hook.py", HOME / "hooks" / "saveit" / "saveit-hook.py")
 install_file(ROOT / "loop" / "loop-stop.py", HOME / "hooks" / "loop" / "loop-stop.py")
+install_file(ROOT / "loop" / "loop-wake.py", HOME / "hooks" / "loop" / "loop-wake.py")  # its timer: loop-wake.py install
 install_file(ROOT / "graph" / "graph-hook.py", HOME / "hooks" / "graph" / "graph-hook.py")
 
 # Agents

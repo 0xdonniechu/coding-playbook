@@ -12,20 +12,23 @@ loop.py start) whose session is the one stopping. Then, in this order:
      the session waits and is woken when it ends; not counted as a stop without progress, 10 times in a row at most.
      A background shell is not waited for (a dev server never ends, and nothing would wake the session);
   3. the same fingerprint for the third stop in a row: the run closes ("no progress in 3 stops");
-  4. the reviewers' word: the last verdict on record must not be FAIL, must be PASS when a Proof item names a review,
-     and every reviewer FAIL must have its `loop.py fail`. The verdicts come from the SubagentStop hook, which records
-     what each run of an agent whose type ends in `reviewer` returned (the first PASS or FAIL word of its last
-     message). They are not tied to a task, and the run file is a plain file: this guards against haste, not against a
-     session that sets out to cheat;
+  4. the reviewers' word, task by task: no task's last verdict may be FAIL, a Proof item that names a review needs a
+     PASS for some task, and every reviewer FAIL of a task must have its `loop.py fail`. The verdicts come from the
+     SubagentStop hook, which records what each run of an agent whose type ends in `reviewer` returned (the first PASS
+     or FAIL word of its last message) for each plan task named on a prompt line that starts with `loop task: T<n>`
+     (`loop tasks: T1, T2`); a verdict that names none is kept but counts for nothing, so a review of other work in the
+     same session, given no marker, does not pass this run (the marker is for reviews of the open run's plan only). The run file is a plain file: this guards against haste, not against a session that sets out to
+     cheat;
   5. the run's judge, `sdlc-check.py converge <plan> --base <base>`, with `--checks` once step 4 leaves nothing: a
      gap, a failing check or a proof result that is a FAIL blocks the stop and gives the session the list as its next
      work; a plan the judge cannot read blocks with its error. The third round with a failing check closes the run
      ("checks"; the count starts again only at `loop.py resume`);
   6. nothing left: the run closes as done and the session stops.
 When a run closed and needs the owner (ask, two fails, idle, limit, checks), the hook comments once on the plan's
-Plane ticket (`Plane <KEY-N>` in the plan; `plane.py` beside the judge; detached, best effort; a failing check is
+Plane ticket (`Plane <KEY-N>` in the plan; `plane.py` beside the judge; waited for, 30 s at most, best effort; a failing check is
 named by its task and command, never by its output). When the session's
 permission mode asks before tool calls it says so once: such a run waits for the owner at every unknown command.
+The session's permission mode is recorded in the run (`mode`) at every stop it judges, for loop-wake.py.
 The run is found through ~/.claude/1prompt-runs/<session id> (written by loop.py start), whatever the session's cwd.
 The fingerprint is HEAD, the content of every tracked change and untracked file, the plan and the verdicts. Done needs
 the judge's own "PASS: converge" line and exit 0: a judge that crashes, times out or prints something else holds the
@@ -138,18 +141,46 @@ def session_run(payload):
 
 
 def notify(run, text):
-    """Tells the owner through the plan's Plane ticket; detached and best effort, it never delays or fails the hook."""
+    """Tells the owner through the plan's Plane ticket; best effort, it never fails the hook. It waits for plane.py (30 s
+    at most, only when a run closes): a session woken by loop-wake.py runs in a systemd unit, which kills a detached
+    child when the session exits, and the comment with it."""
     try:
         plan = Path(str(run.get("plan")))
         key = re.search(r"\bPlane ([A-Z][A-Z0-9]*-\d+)\b", plan.read_text(encoding="utf-8", errors="replace"))
         plane = Path(str(run.get("judge"))).parent / "plane.py"
         if key and plane.is_file():
-            subprocess.Popen([sys.executable, str(plane), "comment", key[1], "--body",
-                              f"1prompt run closed, needs the owner: {text} (plan {plan.name})"],
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             start_new_session=True)
-    except (OSError, ValueError):
+            subprocess.run([sys.executable, str(plane), "comment", key[1], "--body",
+                            f"1prompt run closed, needs the owner: {text} (plan {plan.name})"],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         pass
+
+
+# A line of its own that starts with the marker (after spaces, `>`, `*`, `-`, `_` or backticks): a phrase quoted inside
+# a sentence never counts. Every task id on such a line is named.
+TASK_MARK = re.compile(r"^[ \t>*_`#-]*loop tasks?[ \t*_`]*:(.*)$", re.I | re.M)
+TASK_LIST = re.compile(r"[ \t*_`]*(T[1-9]\d*(?:[ \t*_`]*(?:,|;|&|and)?[ \t*_`]*T[1-9]\d*)*)", re.I)  # ids up to the first other word
+
+
+def review_tasks(payload, plan):
+    """The plan's tasks a reviewer was asked about: lines of its prompt (the first user message of its transcript) that
+    start with `loop task: T<n>` or `loop tasks: T1, T2`. A name the plan does not have counts for nothing."""
+    try:
+        known = set(re.findall(r"^### (T[1-9]\d*) \(", plan.read_text(encoding="utf-8", errors="replace"), re.M))
+        with open(str(payload.get("agent_transcript_path") or ""), encoding="utf-8", errors="replace") as f:
+            for _, line in zip(range(50), f):
+                entry = json.loads(line)
+                if not isinstance(entry, dict) or entry.get("type") != "user":
+                    continue
+                content = (entry.get("message") or {}).get("content")
+                text = content if isinstance(content, str) else "\n".join(
+                    str(b.get("text") or "") for b in content or [] if isinstance(b, dict))
+                lists = [TASK_LIST.match(line) for line in TASK_MARK.findall(text)]
+                named = [t.upper() for m in lists if m for t in re.findall(r"T[1-9]\d*", m[1], re.I)]
+                return sorted({t for t in named if t in known}, key=lambda t: int(t[1:]))
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return []
 
 
 def record_review(payload):
@@ -163,7 +194,9 @@ def record_review(payload):
         return None
     word = re.search(r"\b(PASS|FAIL)\b", str(payload.get("last_assistant_message") or ""))
     reviews = [r for r in run.get("reviews") or [] if isinstance(r, dict)]
-    reviews.append({"agent": payload["agent_type"], "verdict": word[1] if word else "none", "at": now()})
+    verdict = {"agent": payload["agent_type"], "verdict": word[1] if word else "none", "at": now()}
+    tasks = review_tasks(payload, Path(str(run.get("plan"))))
+    reviews += [{**verdict, "task": t} for t in tasks] or [{**verdict, "task": None}]  # no task: kept, counts for nothing
     run["reviews"] = reviews[-50:]
     save(path, run)
     return None
@@ -186,7 +219,9 @@ def decide(payload):
     if not judge.is_file() or not isinstance(base, str) or not isinstance(top, str):
         return None
     fields = ("idle", "fingerprint", "blocks", "waits", "check_fails", "mode_noted", "notified", "state", "closed_by",
-              "reason", "closed_at")
+              "reason", "closed_at", "mode")
+    if isinstance(payload.get("permission_mode"), str):
+        run["mode"] = payload["permission_mode"]  # loop-wake.py wakes a dead session only in a mode that does not ask
 
     def closing(kind, reason, message, ticket=None):
         run.update(state="closed", closed_by=kind, reason=reason, closed_at=now(), notified=kind in NEEDS_OWNER)
@@ -225,23 +260,31 @@ def decide(payload):
 
     # What the run file itself says is left: open review FAILs and the reviewers' word, as the SubagentStop hook
     # recorded it. Only when none of that is left does the judge also run the checks (they are the slow step).
-    own = [f"{task} has a review FAIL with no PASS after it" for task in sorted(run.get("open_fails") or [])]
-    reviews = [r for r in run.get("reviews") or [] if isinstance(r, dict)]
-    last = reviews[-1].get("verdict") if reviews else None
-    told = sum(len(v) for v in (run.get("fails") or {}).values() if isinstance(v, list))
-    untold = sum(1 for r in reviews if r.get("verdict") == "FAIL") - told
+    try:
+        tasks_now = set(re.findall(r"^### (T[1-9]\d*) \(", plan.read_text(encoding="utf-8", errors="replace"), re.M))
+    except OSError:
+        tasks_now = set()
+    own = [f"{task} has a review FAIL with no PASS after it" for task in sorted(run.get("open_fails") or [])
+           if task in tasks_now]  # a task the plan no longer has cannot be passed: it holds nothing
+    # a verdict counts for its task, while the plan still has that task
+    reviews = [r for r in run.get("reviews") or [] if isinstance(r, dict) and r.get("task") in tasks_now]
+    lasts = {r["task"]: r.get("verdict") for r in reviews}
+    fails = run.get("fails") if isinstance(run.get("fails"), dict) else {}
+    untold = {t: sum(1 for r in reviews if r["task"] == t and r.get("verdict") == "FAIL")
+              - len(fails.get(t) if isinstance(fails.get(t), list) else []) for t in lasts}
     try:
         proof = re.search(r"^## Proof\b.*?(?=^## |\Z)", plan.read_text(encoding="utf-8", errors="replace"), re.M | re.S)
     except OSError:
         proof = None
-    if untold > 0:
-        own.append(f"{untold} reviewer FAIL(s) on record without a `loop.py fail <task> \"<reason>\"`: record each "
-                   "(the second FAIL of one task ends the run)")
-    if last == "FAIL":
-        own.append("the last reviewer verdict on record is FAIL: fix its issues and have it reviewed again")
-    elif last != "PASS" and proof and re.search(r"\breview(er|ers|ed|s|ing)?\b", proof[0], re.I):
-        own.append("the plan's Proof names a review and no reviewer PASS is on record: run the reviewer agent "
-                   "(its verdict is recorded when it ends)")
+    for task in sorted(lasts, key=lambda t: int(t[1:])):
+        if untold[task] > 0:
+            own.append(f"{task}: {untold[task]} reviewer FAIL(s) on record without a `loop.py fail {task} \"<reason>\"`: "
+                       "record each (the second FAIL of one task ends the run)")
+        if lasts[task] == "FAIL":
+            own.append(f"{task}: the last reviewer verdict on record for it is FAIL: fix its issues and have it reviewed again")
+    if "PASS" not in lasts.values() and proof and re.search(r"\breview(er|ers|ed|s|ing)?\b", proof[0], re.I):
+        own.append("the plan's Proof names a review and no reviewer PASS for a task is on record: run the reviewer agent "
+                   "with `loop task: T<n>` in its prompt (its verdict is recorded for that task when it ends)")
     try:
         out = subprocess.run([sys.executable, str(judge), "converge", str(plan), "--base", base, *([] if own else ["--checks"])],
                              capture_output=True, text=True, timeout=JUDGE_TIMEOUT, cwd=top)
@@ -284,7 +327,8 @@ def decide(payload):
         listed = "\n".join(f"- {g}" for g in gaps[:20]) + (f"\n- … {len(gaps) - 20} more" if len(gaps) > 20 else "")
         return {"decision": "block", "reason":
                 f"1prompt run open on {plan.name}: {len(gaps)} item(s) left before the goal is done.\n{listed}\n"
-                "Continue with the next one (rate, dispatch or do it, gate, review). Record each review with "
+                "Continue with the next one (rate, dispatch or do it, gate, review; a reviewer's prompt names its task as "
+                "`loop task: T<n>`, or its verdict counts for nothing). Record each review with "
                 "`loop.py pass <task>` or `loop.py fail <task> \"<reason>\"` (`pass` needs a reviewer PASS on record; the second FAIL of a task, or the third round of failing checks, ends the run). "
                 "A path outside every task that is not this work's (the owner's file, another change): do not delete "
                 "it or widen the plan yourself; ask. A question only the owner can answer: "
@@ -365,9 +409,14 @@ def self_test():
         plan.write_text(head + "1. PASS it works\n", encoding="utf-8")
         loopcmd("fail", "T1", "naming")
         expect("an open review FAIL blocks", me, True, "T1 has a review FAIL with no PASS after it")
-        def sub(agent, message, session="sess-1"):  # the SubagentStop hook, as Claude Code calls it
+        def sub(agent, message, session="sess-1", prompt="Review the change.\nloop task: T1", later=None):  # as Claude Code calls it
+            transcript = Path(tmp) / f"agent-{os.urandom(4).hex()}.jsonl"
+            transcript.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n"
+                                  + (json.dumps({"type": "user", "message": {"content": later}}) + "\n" if later else "")
+                                  + json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": message}]}}) + "\n")
             out = subprocess.run([sys.executable, __file__, "subagent-stop"], capture_output=True, text=True, timeout=60, env=env,
-                                 input=json.dumps({"session_id": session, "agent_type": agent, "last_assistant_message": message}))
+                                 input=json.dumps({"session_id": session, "agent_type": agent, "last_assistant_message": message,
+                                                   "agent_transcript_path": str(transcript)}))
             if out.returncode != 0 or out.stdout.strip():
                 failures.append(f"subagent-stop {agent}: exit {out.returncode}, printed {out.stdout.strip()[:100]!r}")
 
@@ -427,17 +476,73 @@ def self_test():
             failures.append(f"a stop during the judge was overwritten: {state().get('state')} {state().get('closed_by')}")
         # the reviewers' word at done time: a last FAIL is never done; a Proof that names a review needs a PASS
         restart()
-        set_run(reviews=[{"agent": "reviewer", "verdict": "PASS", "at": "t"}, {"agent": "reviewer", "verdict": "FAIL", "at": "t"}])
-        expect("the last reviewer verdict is FAIL: not done", me, True, "last reviewer verdict on record is FAIL")
+        set_run(reviews=[{"agent": "reviewer", "verdict": "PASS", "at": "t", "task": "T1"},
+                         {"agent": "reviewer", "verdict": "FAIL", "at": "t", "task": "T1"}])
+        expect("the last reviewer verdict is FAIL: not done", me, True, "T1: the last reviewer verdict on record for it is FAIL")
+        set_run(reviews=[{"agent": "reviewer", "verdict": "FAIL", "at": "t", "task": "T2"},
+                         {"agent": "reviewer", "verdict": "PASS", "at": "t", "task": "T1"}], fails={"T2": ["x"]},
+                idle=0, fingerprint=None)
+        expect("a later PASS of T1 does not hide T2's last FAIL", me, True, "T2: the last reviewer verdict on record for it is FAIL")
+        set_run(reviews=[{"agent": "reviewer", "verdict": "FAIL", "at": "t", "task": "T1"},
+                         {"agent": "reviewer", "verdict": "PASS", "at": "t", "task": "T1"},
+                         {"agent": "reviewer", "verdict": "PASS", "at": "t", "task": "T2"}], fails={"T2": ["x"]},
+                idle=0, fingerprint=None)
+        expect("a `fail` of T2 does not stand for T1's FAIL", me, True, "T1: 1 reviewer FAIL(s) on record without")
+        set_run(reviews=[{"agent": "reviewer", "verdict": "FAIL", "at": "t", "task": "T2"},
+                         {"agent": "reviewer", "verdict": "PASS", "at": "t", "task": "T2"}], fails={}, idle=0, fingerprint=None)
+        out, d = hook(me)
+        if not d or "T2: 1 reviewer FAIL(s)" not in d.get("reason", "") or "T1: 1 reviewer FAIL" in d.get("reason", ""):
+            failures.append(f"a FAIL of T2 was not counted for T2 alone: {d}")
+        set_run(reviews=[{"agent": "reviewer", "verdict": "FAIL", "at": "t", "task": "T1"},
+                         {"agent": "reviewer", "verdict": "PASS", "at": "t", "task": "T1"},
+                         {"agent": "reviewer", "verdict": "FAIL", "at": "t", "task": "T2"},
+                         {"agent": "reviewer", "verdict": "PASS", "at": "t", "task": "T2"}], fails={"T1": ["x"]},
+                idle=0, fingerprint=None)
+        out, d = hook(me)
+        if not d or "T2: 1 reviewer FAIL(s)" not in d.get("reason", "") or "T1: " in d.get("reason", ""):
+            failures.append(f"FAILs were not counted task by task against their own `fail` records: {d}")
+        set_run(reviews=[], fails={"T3": ["x"]}, open_fails=["T3"], idle=0, fingerprint=None)
+        expect("an open FAIL of a task the plan no longer has does not hold the run", me, False, "run done")
+        restart()
+        set_run(reviews=[{"agent": "reviewer", "verdict": "FAIL", "at": "t", "task": "T3"}], fails={}, idle=0, fingerprint=None)
+        expect("a FAIL of a task the plan no longer has does not hold the run", me, False, "run done")
+        restart()
+        set_run(reviews=[{"agent": "reviewer", "verdict": "FAIL", "at": "t", "task": None}], fails={}, idle=0, fingerprint=None)
+        expect("a FAIL that names no task counts for nothing: done", me, False, "run done")
+        restart()
         for wording in ("Reviewer PASS on the branch", "both reviews pass"):
             plan.write_text(head.replace("1. it works\n", f"1. it works\n2. {wording}\n") + "1. PASS it works\n2. PASS\n",
                             encoding="utf-8")
             set_run(reviews=[], idle=0, fingerprint=None)
-            expect(f"Proof says {wording!r}: a reviewer PASS is needed", me, True, "no reviewer PASS is on record")
-        for name, reviews in (("none on record", []), ("only one that gave no verdict", [{"agent": "reviewer", "verdict": "none"}])):
+            expect(f"Proof says {wording!r}: a reviewer PASS is needed", me, True, "no reviewer PASS for a task is on record")
+        for name, reviews in (("none on record", []),
+                              ("only one that gave no verdict", [{"agent": "reviewer", "verdict": "none", "task": "T1"}]),
+                              ("only a PASS that names no task", [{"agent": "reviewer", "verdict": "PASS", "task": None}])):
             set_run(reviews=reviews, idle=0, fingerprint=None)
-            expect(f"Proof names a review, {name}: not done", me, True, "no reviewer PASS is on record")
-        sub("code-reviewer", "PASS")  # a project's own reviewer agent counts too
+            expect(f"Proof names a review, {name}: not done", me, True, "no reviewer PASS for a task is on record")
+        sub("reviewer", "PASS", prompt="Review APS-60's check.py change.")  # other work in the same session
+        sub("reviewer", "PASS", prompt="loop task: T9")  # a task the plan does not have
+        if [r.get("task") for r in state().get("reviews", [])][-2:] != [None, None]:
+            failures.append(f"a verdict naming no task of the plan was tied to one: {state().get('reviews')}")
+        expect("Proof names a review, PASSes for no task of the plan: not done", me, True, "no reviewer PASS for a task")
+        sub("reviewer", "PASS", prompt="Docs for another plan say (or `loop tasks: T1, T2`) inline; no marker line.")
+        sub("reviewer", "PASS", prompt="Review it.", later="loop task: T1")  # only the first user message is the prompt
+        if [r.get("task") for r in state().get("reviews", [])][-2:] != [None, None]:
+            failures.append(f"a quoted marker or one in a later message was counted: {state().get('reviews')}")
+        for prompt, want in (("**Loop task:** `T1`", ["T1"]), ("loop tasks: T1 and T2", ["T1", "T2"]),
+                             ("- loop task: T2", ["T2"]), ("_loop task_: T1", ["T1"]), ("**loop task**: T2", ["T2"]),
+                             ("## loop task: T1", ["T1"]), ("loop task: T1 (not T2, reviewed apart)", ["T1"]),
+                             ([{"type": "text", "text": "Review."}, {"type": "text", "text": "loop task: T1"}], ["T1"]),
+                             ("loop task: T2\nmore\n> loop task: T1", ["T1", "T2"]),
+                             ([{"type": "text", "text": "Review.\nloop task: T2"}], ["T2"])):
+            before = len(state().get("reviews", []))
+            sub("reviewer", "none yet", prompt=prompt)
+            got = [r.get("task") for r in state().get("reviews", [])[before:]]
+            if got != want:
+                failures.append(f"marker {prompt!r}: recorded for {got}, not {want}")
+        sub("code-reviewer", "PASS", prompt="loop tasks: T1, t2 (both)")  # a project's own reviewer counts too
+        if [r.get("task") for r in state().get("reviews", [])][-2:] != ["T1", "T2"]:
+            failures.append(f"a review of two tasks was not recorded for each: {state().get('reviews')}")
         expect("Proof names a review and a reviewer PASS is on record: done", me, False, "run done")
         restart()
         plan.write_text(head.replace("1. it works\n", "1. the preview page renders\n") + "1. PASS it does\n", encoding="utf-8")
@@ -448,9 +553,9 @@ def self_test():
         flag = Path(tmp) / "checked.flag"
         plan.write_text(head.replace("- check: `true`\n\n### T2", f"- check: `touch {flag}`\n\n### T2") + "1. PASS it works\n",
                         encoding="utf-8")
-        sub("reviewer", "FAIL: T2 is wrong")
-        sub("reviewer", "PASS")
-        expect("a reviewer FAIL without its `loop.py fail`: not done", me, True, "1 reviewer FAIL(s) on record without")
+        sub("reviewer", "FAIL: T2 is wrong", prompt="loop task: T2")
+        sub("reviewer", "PASS", prompt="loop task: T2")
+        expect("a reviewer FAIL without its `loop.py fail`: not done", me, True, "T2: 1 reviewer FAIL(s) on record without")
         if flag.exists():
             failures.append("the checks ran while the run file still listed something")
         loopcmd("fail", "T2", "wrong")
@@ -500,6 +605,8 @@ def self_test():
         plan.write_text(head.replace("# Work", "# Work\n\nTicket: Plane TST-7."), encoding="utf-8")
         set_run(judge=str(scripts / "sdlc-check.py"), deadline="2000-01-01T00:00Z")
         hook(me)
+        if not said.exists():  # read at once: the hook waits for the comment (a woken session's unit kills a detached one)
+            failures.append("the hook returned before its ticket comment was written")
         if len(comments(1)) != 1 or not comments(1)[0].startswith("comment TST-7 --body 1prompt run closed, needs the owner: time limit"):
             failures.append(f"the time limit close did not comment on the ticket: {comments(1)}")
         if not state().get("notified"):
@@ -545,6 +652,8 @@ def self_test():
         d = expect("no mode note in a mode that does not ask", {**me, "permission_mode": "bypassPermissions"}, True)
         if d and "systemMessage" in d:
             failures.append("a session that does not ask got the permission mode note")
+        if state().get("mode") != "bypassPermissions":
+            failures.append(f"the session's permission mode was not recorded for loop-wake: {state().get('mode')!r}")
         # idle breaker: nothing changes between stops; an edit to an already dirty file is progress
         restart()
         plan.write_text(head, encoding="utf-8")
