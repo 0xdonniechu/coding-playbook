@@ -103,6 +103,19 @@ class Locked:
 HEREDOC = re.compile(r"<<(-?)[ \t]*(?:'([^'\n]+)'|\"([^\"\n]+)\"|\\?([^\s'\"<>|;&()]+))")
 
 
+def ansi_end(s, i):
+    """Index just past the `'` that closes the ANSI-C string `$'…'` starting at i (where `\\'` is no close); None when
+    it never closes."""
+    j = i + 2
+    while j < len(s) and s[j] != "'":
+        j += 2 if s[j] == "\\" else 1
+    return j + 1 if j < len(s) else None
+
+
+CASE_WORD = re.compile(r"(case|esac)(?=[\s;&|)]|$)")
+CASE_BEFORE = re.compile(r"(?:[;&|(\n]|\b(?:then|do|else|elif)|[!{])[ \t]*$")  # a command starts here
+
+
 def strip_heredocs(text):
     """Drops heredoc bodies (up to each delimiter line), reading quotes over the whole text: a `<<` inside quotes, or
     `<<<`, starts none; `$(` inside double quotes is unquoted until its `)`; a `#` comment is copied as it is."""
@@ -127,6 +140,10 @@ def strip_heredocs(text):
             quote = None if c == '"' else quote
             out.append(c)
             i += 1
+        elif text.startswith("$'", i):
+            j = ansi_end(text, i) or n
+            out.append(text[i:j])
+            i = j
         elif c in "'\"":
             quote = c
             out.append(c)
@@ -177,7 +194,9 @@ def strip_heredocs(text):
 def pieces(text):
     """Splits a command line outside quotes into word strings and the markers '(' and ')'."""
     text = strip_heredocs(text).replace("\\\n", " ")
-    out, cur, i, quote, depth = [], [], 0, None, 0
+    # scan: no `$(` has failed to close yet; after one has, the rest is read character by character (bash would
+    # stop there anyway), so a long unclosed text costs one pass, not one per `$(`.
+    out, cur, i, quote, scan = [], [], 0, None, True
     while i < len(text):
         c = text[i]
         if quote:
@@ -185,14 +204,19 @@ def pieces(text):
             if c == "\\" and quote == '"' and i + 1 < len(text):
                 cur.append(text[i + 1])
                 i += 1
-            elif quote == '"' and text.startswith("$(", i):
-                depth += 1
-                cur.append("(")
-                i += 1
-            elif quote == '"' and c == ")" and depth:
-                depth -= 1
-            elif c == quote and not depth:
+            elif quote == '"' and scan and text.startswith(("$(", "${"), i):
+                j = scan_end(text, i + 2, [['"'], ["{"]] if text[i + 1] == "{" else [["sub", 0, 0]])
+                if j is None:
+                    scan = False
+                else:
+                    cur.append(text[i + 1:j])
+                    i = j - 1
+            elif c == quote:
                 quote = None
+        elif text.startswith("$'", i):
+            j = ansi_end(text, i) or len(text)
+            cur.append(text[i:j])
+            i = j - 1
         elif c in "'\"":
             quote = c
             cur.append(c)
@@ -200,10 +224,9 @@ def pieces(text):
             cur.append(text[i:i + 2])
             i += 1
         elif text.startswith("$(", i):
-            j, level = i + 2, 1
-            while j < len(text) and level:
-                level += {"(": 1, ")": -1}.get(text[j], 0)
-                j += 1
+            j = substitution_end(text, i + 2) if scan else None
+            scan = scan and j is not None
+            j = j or i + 2  # unclosed: keep `$(` in the word, read on (`;` and `&&` after it still split)
             cur.append(text[i:j])
             i = j - 1
         elif c == "&" and ((i and text[i - 1] in "<>") or text.startswith("&>", i)):
@@ -231,38 +254,73 @@ REDIRECT = re.compile(r"^(\d*|&)(>>?|<)")
 
 
 def substitution_end(s, i):
-    """Index just past the `)` that closes a `$(` whose body starts at i; None when it never closes (the caller then
-    leaves the text as it is). A stack of contexts keeps nesting exact: code inside a substitution (with its own
-    parenthesis count, single quotes skipped whole) and double-quoted text (where `$(` opens a new substitution)."""
-    stack = [["sub", 0]]
+    """Index just past the `)` that closes a `$(` whose body starts at i; None when it never closes."""
+    return scan_end(s, i, [["sub", 0, 0]])
+
+
+def scan_end(s, i, stack):
+    """Index just past the character that closes the innermost context of `stack` (`)` for a substitution, `}` for
+    `${ … }`), scanning from i; None when it never closes (the caller then reads the
+    text after it character by character). A stack of contexts keeps nesting exact: code inside a
+    substitution (its own parenthesis count, and its open `case` count so a pattern's `)` does not close it; `'…'` and
+    `$'…'` skipped whole, `#` comments to the line end),
+    double-quoted text and `${ … }` (each `$(` in any of them opens a new substitution; backticks skipped whole)."""
+    floor, start = len(stack) - 1, i
     while i < len(s):
         c, top = s[i], stack[-1]
         if c == "\\":
             i += 2
             continue
-        if top[0] == '"':
-            if c == '"':
-                stack.pop()
-            elif s.startswith("$(", i) and not s.startswith("$((", i):
-                stack.append(["sub", 0])
-                i += 2
-                continue
-        elif c == "'":
-            j = s.find("'", i + 1)
-            if j < 0:
+        if c == "`":
+            j = i + 1
+            while j < len(s) and s[j] != "`":
+                j += 2 if s[j] == "\\" else 1
+            if j >= len(s):
                 return None
             i = j + 1
             continue
+        if s.startswith("${", i):
+            stack.append(["{"])
+            i += 2
+            continue
+        if s.startswith("$(", i):
+            stack.append(["sub", 0, 0])
+            i += 2
+            continue
+        if top[0] == '"':
+            if c == '"':
+                stack.pop()
+        elif c == "'" or s.startswith("$'", i):  # bash matches these inside `${ }` even within double quotes
+            j = ansi_end(s, i) if c == "$" else (s.find("'", i + 1) + 1 or None)
+            if j is None:
+                return None
+            i = j
+            continue
         elif c == '"':
             stack.append(['"'])
+        elif top[0] == "{":
+            if c == "}":
+                stack.pop()
+                if len(stack) == floor:
+                    return i + 1
+        elif c == "#" and (i == start or s[i - 1] in " \t\n;&|("):
+            j = s.find("\n", i)
+            i = len(s) if j < 0 else j
+            continue
+        elif c in "ce" and CASE_WORD.match(s, i) and CASE_BEFORE.search(s, max(start - 1, i - 64), i):
+            top[2] += 1 if c == "c" else -1 if top[2] else 0
+            i += 4
+            continue
         elif c == "(":
             top[1] += 1
         elif c == ")":
             if top[1]:
                 top[1] -= 1
+            elif top[2]:
+                pass  # a `case` pattern's closing paren
             else:
                 stack.pop()
-                if not stack:
+                if len(stack) == floor:
                     return i + 1
         i += 1
     return None
@@ -276,6 +334,11 @@ def blank_substitutions(s):
         c = s[i]
         if quote == "'":
             quote = None if c == "'" else quote
+        elif s.startswith("$'", i) and quote is None:
+            j = ansi_end(s, i) or len(s)
+            out.append(s[i:j])
+            i = j
+            continue
         elif c == "'" and quote is None:
             quote = "'"
         elif c == '"':
@@ -776,9 +839,25 @@ def self_test():
                           ("a $(echo (x)) c", "a $SUBST c"), ("a $(echo \\)) c", "a $SUBST c"),
                           ("a $(echo 'x c", "a $(echo 'x c"), ("a `b \\`c\\`` d", "a $SUBST d"),
                           ("a `b c", "a `b c"), ("a $((1+2)) c", "a $((1+2)) c"), ("'$(x)' $(y)", "'$(x)' $SUBST"),
-                          ('a $(b "$(c ")")" d) e', "a $SUBST e")):
+                          ('a $(b "$(c ")")" d) e', "a $SUBST e"), ("a $'x\\'y' $(b) c", "a $'x\\'y' $SUBST c"),
+                          ("a $(case x in x) b;; esac) c", "a $SUBST c"), ("a $(echo case b) c", "a $SUBST c"),
+                          ("a $(b `c )` d) e", "a $SUBST e"), ("a $(b ${x:-)} c) d", "a $SUBST d")):
             if blank_substitutions(raw) != want:
                 problems.append(f"blank_substitutions({raw!r}) = {blank_substitutions(raw)!r}, expected {want!r}")
+        for raw, want in (("x=$'it\\'s' ; y", ["x=$'it\\'s' ", " y"]), ('a "${x:-\')\'}" ; b', ['a "${x:-\')\'}" ', " b"]),
+                          ('a "${x:-\'}"\'}" ; b', ['a "${x:-\'}"\'}" ', " b"]), ('a "$(b # c"\n)" ; d', ['a "$(b # c"\n)" ', " d"]),
+                          ("a $(b ; c ; d", ["a $(b ", " c ", " d"]), ('a "$(b ; c', ['a "$(b ; c'])):
+            if pieces(raw) != want:
+                problems.append(f"pieces({raw!r}) = {pieces(raw)!r}, expected {want!r}")
+        scans, real_scan = [], scan_end
+        globals()["scan_end"] = lambda *a: scans.append(1) or real_scan(*a)
+        try:
+            pieces('echo "' + "$( " * 300)  # unclosed: scanned once, not once per `$(`
+            pieces("echo " + "$( " * 300)
+        finally:
+            globals()["scan_end"] = real_scan
+        if len(scans) > 4:
+            problems.append(f"pieces: {len(scans)} scans of two unclosed texts, expected at most 4")
         heredoc_body = "cat > /tmp/x.md <<'EOF'\ngit checkout -b feature/x\ngit push origin feature/y\nEOF"
         quoted_heredoc = ('git commit -m "$(cat <<\'EOF\'\nFix parser (APS-66)\n\nRefuse "cd x && git checkout -b wip"'
                           ' and one more " quote\nEOF\n)"')
@@ -822,6 +901,22 @@ def self_test():
                  ("git push origin `echo \\`echo b\\`` main", True), ("git push origin $(echo x main", True),
                  ("git checkout -q -b aps-70-sync-$(git -C /x rev-parse --short \"$(git -C /x merge-base HEAD origin/main)\") main", False),
                  ('git push origin "$(echo "$(echo b)")" HEAD:main "x)"', True),
+                 ('git push origin "$(echo "$((1+2))")" :main', True), ('git push origin $(echo ")") :main', True),
+                 ('git push origin "$(echo ")")" :main', True), ("git push origin \"$(( (1+2) ))\" :main", True),
+                 ('git checkout -b "x-$(echo "$((1+2))")" main && git checkout -b wip', True),
+                 ("out=$(git status --short  # don't fail on a clean tree\n) && git push origin HEAD:main", True),
+                 ("n=$(\n  # it's fine when empty\n  git status --short\n)\ngit push origin main", True),
+                 ("x=$(printf $'it\\'s')\ngit push origin main", True),
+                 ('echo "$(echo a # c"\n)" && git push origin HEAD:main', True),
+                 ('echo $(echo ")"); git push origin main', True), ('git commit -m "fix $(" && git push origin HEAD:main', True),
+                 ("echo $(echo '(' ; git push origin main", True), ("echo $(echo $# x) ; git push origin main", True),
+                 ('git push $(echo "e)" "${x:-")"}") :main', True), ("echo $(echo `echo )`) ; git push origin main", True),
+                 ("echo \"$(echo 'a\"b')\" ; git push origin main", True),
+                 ("$'a\\'b' \"$(echo x)\" | git checkout -b wip", True), ("x=$'it\\'s' ; git push origin main", True),
+                 ("echo $(case a in a) echo x;; esac) ; git push origin main", True),
+                 ("echo $(case a in\na) echo x;;\nesac) ; git push origin main", True),
+                 ("echo $(echo case a) ; git push origin main", True), ('git push "${x:-")"}" :main', True),
+                 ('git push $(echo "${x:-$(echo a\n)}") "${x:-")"}" :main', True), ('echo "${x:-"}"}" ; git push origin main', True), ('echo "$((echo ")"))" ; git push origin main', True),
                  ("git checkout -b \"x-$(echo ')' -C y)\" main", False), ("git push origin `echo x main", True), ("sudo -u root git checkout -b wip", True),
                  ("env -u X git checkout -b wip", True), ("echo 'a << EOF'\ngit checkout -b wip", True),
                  ("cat <<EOF\nline one\ngit checkout -b wip\nEOF", False),
@@ -833,6 +928,7 @@ def self_test():
                  ("cat > f <<'END-OF-FILE'\ngit checkout -b wip\nEND-OF-FILE", False),
                  ("cat > f <<\\EOF\ngit checkout -b wip\nEOF", False),
                  ('cat "$(pwd)/f" <<EOF\ngit checkout -b wip\nEOF', False),
+                 ("cat $'it\\'s' <<EOF\ngit checkout -b wip\nEOF", False),
                  ('echo "line one\n<< EOF"\ngit checkout -b wip', True),
                  ("echo a # a comment with << EOF\ngit checkout -b wip", True), ("git worktree add ../bad 2>&1", True),
                  ('gh pr create --body "$(cat <<\'EOF\'\ngit checkout -b feature/x\nEOF\n)"', False),
