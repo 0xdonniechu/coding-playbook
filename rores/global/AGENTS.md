@@ -3,18 +3,18 @@
 
 ## Model economy
 The main session runs the model with the best quality per cost for deciding, rating, gating and HARD work. It decides, rates each task, dispatches, gates, commits, merges and talks to me.
-**Current choice (2026-11-12): GPT-6 Luna (`gpt-6-luna`), reasoning effort `high`.**
+**Current choice (2026-11-12): 6.1 Sol (`gpt-6.1-sol`, `high` reasoning effort).** 6 Astra (`gpt-6-astra`) is reserved as `hard-reviewer` (the strongest tier, separate from the main session so HARD changes are reviewed by a stronger, different model).
 
 Where each setting lives (`AGENTS.md` only records the choice; `~/.codex/config.toml` sets it):
-- Main session model: `model = "gpt-6-luna"` in `~/.codex/config.toml`, as a full model ID, never an alias, so an upgrade is always a decision.
-- Reasoning effort: `model_reasoning_effort = "high"` in `~/.codex/config.toml`. Set once per session, never changed mid-session.
+- Main session model: `model = "gpt-6.1-sol"` in `~/.codex/config.toml`, as a full model ID, never an alias, so an upgrade is always a decision.
+- Reasoning effort: `model_reasoning_effort = "high"` in `~/.codex/config.toml` for the main session (`builder`, `reviewer`, `hard-reviewer`: `high`; `transcriber`: `low`). Set once per session, never changed mid-session.
 - Command & boundary safety (no dedicated decision-classifier model like GD1): relies on Codex sandbox/approval policies (`trust_level` in `~/.codex/config.toml`), deterministic guard scripts (`hooks/agent-guard.py`, `guard/owner-token-guard.py`, `gates/session-gates.py`), and the 4-axis task rating below.
 
 Subagents / delegated workers (using the role specs in `~/work/0xdonniechu/coding-playbook/rores/agents/`):
-- **builder**: implements an approved plan step. Edits the working tree only; never commits, pushes, opens PRs, merges or updates an issue tracker.
-- **reviewer** (`gpt-6-luna`, `high`): independent review of a MEDIUM diff; returns PASS/FAIL with numbered issues. Never edits.
-- **hard-reviewer** (cross-model / cross-family worker via Orca `orchestration`, e.g. Claude Opus/Fable or Gemini 4 Argon): the same review for HARD changes, by a different model from the one that wrote the change, so it does not share its blind spots.
-- **transcriber** (low effort / fast model): mechanical copying and conversion only, no judgment.
+- **builder** (6.1 Terra `gpt-6.1-terra`, `high`): implements an approved plan step. Edits the working tree only; never commits, pushes, opens PRs, merges or updates an issue tracker.
+- **reviewer** (6.1 Sol `gpt-6.1-sol`, `high`): independent review of a MEDIUM diff; returns PASS/FAIL with numbered issues. Never edits.
+- **hard-reviewer** (6 Astra `gpt-6-astra`, `high`): independent review for HARD changes by the strongest model, different from the one (`gpt-6.1-sol`) that wrote the change, so it does not share its blind spots.
+- **transcriber** (6 Luna `gpt-6-luna`, `low`): mechanical copying and conversion only, no judgment.
 
 Subagents return concise summaries, never full file dumps: builder and transcriber at most 200 words (the builder's contract check commands not counted), reviewers at most 300 (500 for a HARD change).
 Small tasks (1-2 files, obvious change) are done directly, not dispatched.
@@ -24,9 +24,9 @@ Rate on four axes: ambiguity, coupled decisions, verifiability, cost of error. J
 - One-click undo (docs, tests, one function: a revert fixes it): low.
 - Cleanup undo (shared helpers, an interface other code calls, rules every session acts on: a revert leaves work or decisions to redo): high.
 - No undo: **HARD**, whatever the other axes say. User data lost or migrated (schema migrations included), auth or any other security boundary weakened, money moved, something published or sent, and anything else no revert takes back (a force push, a production setting, a deletion).
-- All low → **EASY**: transcriber or builder, no review.
-- One high → **MEDIUM**: builder, then reviewer.
-- Two or more high, **or** no undo → **HARD**: the main session does it directly, then hard-reviewer reviews it.
+- All low → **EASY**: transcriber (`gpt-6-luna`) or builder (`gpt-6.1-terra`), no review.
+- One high → **MEDIUM**: builder (`gpt-6.1-terra`), then reviewer (`gpt-6.1-sol`).
+- Two or more high, **or** no undo → **HARD**: the main session (`gpt-6.1-sol`) does it directly, then hard-reviewer (`gpt-6-astra`) reviews it.
 Each project's `AGENTS.md` / `CLAUDE.md` lists its own HARD / MEDIUM / EASY examples; those override this default.
 
 ## The loop

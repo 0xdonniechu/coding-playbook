@@ -7,7 +7,7 @@ The subagent roles (builder, reviewer, hard-reviewer, transcriber), the global i
 - `python3 scripts/check.py`: agent frontmatter and pinned models, `hard-reviewer` body equal to `reviewer` body, `rores/global/CLAUDE.md` matches the pins, the starter-kit template's sections, skill frontmatter, `settings-defaults.json`, and the self-tests of `dispatch.py`, `sdlc-check.py`, `switch-model.py`, `saveit/saveit-hook.py`, `plane.py`, `progress-diagram.py`, `graph/graph-hook.py`, `loop/loop.py` and `loop/loop-stop.py`, `scripts/cost-report.py` and `scripts/sync-public.py`, `loop/loop-wake.py --self-test`, plus `install.py --settings`.
 - `HOME=$(mktemp -d) python3 scripts/install.py` then `--check` under the same `HOME`: installs and reports no drift, without touching `~/.claude`.
 
-## HARD: the main session (`gpt-6-luna`, `high`) does it directly, then hard-reviewer
+## HARD: the main session (`gpt-6.1-sol`, `high`) does it directly, then hard-reviewer (`gpt-6-astra`, `high`)
 - The model choice and switching: the "Current choice" line, any agent's `model:` or `effort:`, `scripts/switch-model.py`.
 - Task rating (EASY / MEDIUM / HARD), the review loop, who may commit or merge, the honesty rules.
 - The reviewers' checklist and their PASS/FAIL rule.
@@ -16,12 +16,12 @@ The subagent roles (builder, reviewer, hard-reviewer, transcriber), the global i
 - `gates/session-gates.py` and `.claude/branch-name.json`.
 - The installer's writes to `~/.claude`, `~/.codex`, and `~/.gemini`.
 
-## MEDIUM: builder builds, reviewer (`gpt-6-luna`, `high`) reviews
+## MEDIUM: builder (`gpt-6.1-terra`, `high`) builds, reviewer (`gpt-6.1-sol`, `high`) reviews
 - Builder and transcriber wording that changes what they do or when they stop; the template's sections; a skill's steps or stop points; `scripts/check.py`; `scripts/sdlc-check.py`.
 - Shortening or rewording global instructions or a skill without changing a rule.
 - `graph/graph-hook.py`, `docs/internals.md`, `scripts/plane.py`, `scripts/progress-diagram.py`, `scripts/hil-report.py`, `scripts/cost-report.py`.
 
-## EASY: transcriber or builder, no review
+## EASY: transcriber (`gpt-6-luna`, `low`) or builder (`gpt-6.1-terra`), no review
 - README wording, typos, examples that do not change a rule, intent and plan status lines that record work done.
 
 ## Rules

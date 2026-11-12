@@ -10,17 +10,17 @@ These commands are the default checks of a builder's task contract (`dispatch.py
 - <Any end-to-end, replay or golden check, and when it is required>
 - Owner-only or other-machine checks: <list them, so agents write "not run" instead of guessing>
 
-## HARD: the main session (`gpt-6-luna`, `high`) does it directly, then hard-reviewer
+## HARD: the main session (`gpt-6.1-sol`, `high`) does it directly, then hard-reviewer (`gpt-6-astra`, `high`)
 - <The code that decides the core behaviour, where a wrong answer is silent>
 - <Anything that deletes, migrates, pays, sends, or cannot be undone>
 - <Credentials, auth, keys and how they are loaded>
 - <Cross-component contracts, formats and test vectors>
 
-## MEDIUM: builder builds, reviewer (`gpt-6-luna`, `high`) reviews
+## MEDIUM: builder (`gpt-6.1-terra`, `high`) builds, reviewer (`gpt-6.1-sol`, `high`) reviews
 - <New integrations, channels, retries and rate limits, scheduling, storage outside the HARD core>
 - <A bug with a clear stack trace outside the HARD areas>
 
-## EASY: transcriber or builder, no review
+## EASY: transcriber (`gpt-6-luna`, `low`) or builder (`gpt-6.1-terra`), no review
 - <Wording, formatting, reports from stored data, README and docstrings, renames, log cleanup>
 
 ## Rules
