@@ -5,6 +5,7 @@ Run: python scripts/check.py   (exit 0 = PASS, 1 = FAIL). Standard library only.
 """
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -30,6 +31,31 @@ HAND_INVOKED = {"orca-worktree-setup", "agent-team", "create-skill"}  # own skil
 DEFAULT_KEYS = {"enabledPlugins", "skillOverrides"}
 OVERRIDES = {"on", "name-only", "user-invocable-only", "off"}
 DESCRIPTION_LIMIT = 1024  # the Agent Skills spec maximum; Claude Code's own cut-off is higher
+SKILL_COLLISION_LIMIT = 0.60  # maximum TF-IDF cosine similarity between any two skill descriptions
+SKILL_STOP = {"a", "an", "and", "any", "are", "as", "at", "be", "before", "by", "for", "from", "in", "into", "is",
+              "it", "its", "my", "need", "needs", "of", "on", "or", "our", "so", "that", "the", "them", "this", "to",
+              "use", "want", "we", "when", "with", "you", "your", "help", "me", "i", "not", "only", "one", "each",
+              "every", "same", "also", "then", "than", "without", "after"}
+SKILL_TRIGGERS = {
+    "agent-team": (["split waves and run to done with one approval", "hand over a multi-part change across role agents"],
+                   ["write the intent file first"]),
+    "create-skill": (["turn this recurring job into a skill from the template", "create a new skill with a countable eval"],
+                     ["set up a new repo with starter-kit"]),
+    "handoff": (["save progress to HANDOFF.md before clear", "pick up where we left off and resume"],
+                ["what next in this session"]),
+    "orca-worktree-setup": (["configure Orca setup script so new worktrees get local files", "orca worktree config for gitignored .env"],
+                            ["save progress to HANDOFF.md"]),
+    "sdlc": (["write the intent and follow the plan to verify and ship", "start a new feature with the artifact chain"],
+             ["split waves across role agents"]),
+    "secrets": (["keep API keys and .env passwords safe before pushing to GitHub", "connect a new API without leaking secrets"],
+                ["create a new skill from template"]),
+    "starter-kit": (["run /starter-kit to set up a new repo from the CLAUDE.md template", "set git identity and tracker project for a new repo"],
+                    ["save progress before compact"]),
+    "teardown": (["decompose product and write a clean-room specification", "reverse engineer how product X works"],
+                 ["write the intent for a refactor"]),
+    "whats-next": (["what next in this working session recap", "sweep the session for unfinished work and propose next steps"],
+                   ["resume from HANDOFF.md"]),
+}
 
 failures = []
 
@@ -85,10 +111,27 @@ def split_frontmatter(rel):
         fail(f"{rel}: frontmatter is not closed by a '---' line")
         return {}, None
     fields = {}
-    for line in head.splitlines():
+    lines = head.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line or line[:1].isspace():
+            i += 1
+            continue
         key, sep, value = line.partition(":")
         if sep:
-            fields[key.strip()] = value.strip().strip("\"'")
+            k, v = key.strip(), value.strip().strip("\"'")
+            if v in ("|", ">"):
+                block = []
+                i += 1
+                while i < len(lines) and (not lines[i].strip() or lines[i][:1].isspace()):
+                    if lines[i].strip():
+                        block.append(lines[i].strip())
+                    i += 1
+                fields[k] = " ".join(block)
+                continue
+            fields[k] = v
+        i += 1
     return fields, body
 
 
@@ -293,16 +336,33 @@ else:
     if set(defaults.get("skillOverrides") or {}) & (SKILLS - HAND_INVOKED):
         fail("rores/global/settings-defaults.json: must not override this repo's own skills (only " + ", ".join(sorted(HAND_INVOKED)) + " may be set there)")
 
+def skill_tokens(text):
+    out = []
+    for w in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", text.lower()):
+        for part in ([w] + (w.split("-") if "-" in w else [])):
+            if len(part) >= 2 and part not in SKILL_STOP:
+                if part.endswith("ing") and len(part) > 5:
+                    part = part[:-3]
+                elif part.endswith("ed") and len(part) > 4:
+                    part = part[:-2]
+                elif part.endswith("s") and not part.endswith("ss") and len(part) > 3:
+                    part = part[:-1]
+                out.append(part)
+    return out
+
+
 skills = sorted(p.name for p in (ROOT / "skills").iterdir() if p.is_dir()) if (ROOT / "skills").is_dir() else []
 if set(skills) != SKILLS:
     fail(f"skills/: expected {sorted(SKILLS)}, found {skills}")
+skill_descs = {}
 for name in skills:
     rel = f"skills/{name}/SKILL.md"
     fields, _ = split_frontmatter(rel)
     description = fields.get("description", "")
+    skill_descs[name] = f"{name} {description}"
     if fields.get("name") != name:
         fail(f"{rel}: name '{fields.get('name')}' does not match the folder name")
-    if not description:
+    if not description or description in ("|", ">"):
         fail(f"{rel}: no description")
     if len(description) > DESCRIPTION_LIMIT:
         fail(f"{rel}: description is {len(description)} characters, over {DESCRIPTION_LIMIT}")
@@ -311,6 +371,43 @@ for name in skills:
 if "starter-kit" in skills:
     if split_frontmatter("skills/starter-kit/SKILL.md")[0].get("disable-model-invocation") != "true":
         fail("skills/starter-kit/SKILL.md: needs 'disable-model-invocation: true' (it must cost no context)")
+if set(SKILL_TRIGGERS) != SKILLS:
+    fail(f"check.py SKILL_TRIGGERS: expected {sorted(SKILLS)}, found {sorted(SKILL_TRIGGERS)}")
+elif set(skills) == SKILLS:
+    docs = {k: skill_tokens(v) for k, v in skill_descs.items()}
+    df = {}
+    for toks in docs.values():
+        for t in set(toks):
+            df[t] = df.get(t, 0) + 1
+
+    def tfidf(toks):
+        if not toks:
+            return {}
+        tf = {}
+        for t in toks:
+            tf[t] = tf.get(t, 0) + 1
+        v = {t: (c / len(toks)) * (math.log((len(docs) + 1) / (df.get(t, 0) + 1)) + 1) for t, c in tf.items()}
+        norm = math.sqrt(sum(x * x for x in v.values())) or 1.0
+        return {t: x / norm for t, x in v.items()}
+
+    vecs = {k: tfidf(toks) for k, toks in docs.items()}
+    cosine = lambda a, b: sum(a.get(k, 0.0) * b.get(k, 0.0) for k in a)
+    for i, a in enumerate(skills):
+        for b in skills[i + 1:]:
+            sim = cosine(vecs[a], vecs[b])
+            if sim > SKILL_COLLISION_LIMIT:
+                fail(f"skills/{a} and skills/{b}: descriptions collide (TF-IDF cosine {sim:.2f} > {SKILL_COLLISION_LIMIT})")
+    for name, (positives, negatives) in sorted(SKILL_TRIGGERS.items()):
+        for prompt in positives:
+            pv = tfidf(skill_tokens(prompt))
+            ranked = sorted(skills, key=lambda s: cosine(pv, vecs[s]), reverse=True)
+            if ranked[0] != name:
+                fail(f"skills/{name}: positive trigger {prompt!r} ranked {ranked[0]} #1 instead of {name}")
+        for prompt in negatives:
+            nv = tfidf(skill_tokens(prompt))
+            ranked = sorted(skills, key=lambda s: cosine(nv, vecs[s]), reverse=True)
+            if ranked[0] == name:
+                fail(f"skills/{name}: negative trigger {prompt!r} still ranked {name} #1")
 
 # install.py must write nothing for --help or an unknown argument (2026-11-08: an ignored `--help` ran the real
 # install). Run against a temporary HOME, so a regression writes there, never into the real ~/.claude.

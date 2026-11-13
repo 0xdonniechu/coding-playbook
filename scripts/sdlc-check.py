@@ -9,7 +9,10 @@
 is missing or does not begin with `None`. Run it before the intent goes to `approved`, and again before the plan.
 
 `converge` compares a plan with its branch: the paths changed since the merge base with `--base` (default
-`origin/main`, else `main`), the working tree and untracked files included. Each gap is one line:
+`origin/main`, else `main`), the working tree and untracked files included. It also reports `floor:` notes when the
+diff or an untracked file adds a linter or type-checker suppression (`noqa`, `type: ignore`, `@ts-ignore`,
+`@ts-expect-error`, `eslint-disable`), adds a test skip, deletes a test file, or removes more `assert` lines than it
+adds, so the reviewer sees every bar-lowering change. Each gap is one line:
   - a changed path that no task allows (agent-guard's own rule: inside `allow`, outside `forbid`), other than the
     plan and its intent;
   - a task, not marked `not needed`, whose `allow` matches no changed path;
@@ -39,6 +42,10 @@ ROOT = Path(__file__).resolve().parent.parent
 HEADING = re.compile(r"^### (T\d+) \((builder|main)(, parallel)?\) (\S.*)$")
 TICKED = re.compile(r"`([^`]+)`")
 RESULT = re.compile(r"^(PASS|FAIL|not run: \S)")
+SUPPRESSION = re.compile(r"(?:#\s*(?:noqa|type:\s*ignore)\b|//\s*@ts-(?:ignore|expect-error)\b|(?:/\*|//)\s*eslint-disable\b)")
+TEST_SKIP = re.compile(r"(?:@(?:unittest\.|pytest\.mark\.)?skip(?:If|Unless|if)?\b|\b(?:it|test|describe)\.skip\s*\(|\bpytest\.skip\s*\()")
+ASSERT_LINE = re.compile(r"^\s*(?:assert\b|self\.assert\w+\s*\(|expect\s*\()")
+TEST_FILE = re.compile(r"(?:^|/)(?:test_[^/]+\.py|[^/]+_test\.(?:py|go)|[^/]+\.(?:test|spec)\.[jt]sx?)$")
 
 
 class Malformed(Exception):
@@ -183,6 +190,61 @@ def changed_paths(top, base):
     return base, sorted(p for p in paths if p)
 
 
+def floor_notes(top, base, paths, own):
+    """Floor notes for the reviewer: added suppressions, added test skips, deleted test files, and net removed assertions."""
+    notes, added_asserts, removed_asserts = [], {}, {}
+    mb = git(top, "merge-base", base, "HEAD").strip()
+    untracked = sorted(p for p in set(git(top, "-c", "core.quotePath=false", "ls-files", "--others", "--exclude-standard").splitlines()) if p)
+    for p in paths:
+        if p in own:
+            continue
+        if TEST_FILE.search(p) and not (top / p).exists():
+            notes.append(f"floor: {p}: test file deleted")
+    diff = git(top, "-c", "core.quotePath=false", "diff", "--no-renames", "--unified=0", mb)
+    cur = None
+    for raw in diff.splitlines():
+        if raw.startswith("+++ b/"):
+            cur = raw[6:]
+        elif raw.startswith("+++ /dev/null"):
+            pass
+        elif raw.startswith("--- a/"):
+            cur = raw[6:]
+        elif cur and cur not in own and not cur.endswith(".md"):
+            if raw.startswith("+") and not raw.startswith("+++"):
+                line = raw[1:]
+                if "floor:" not in line:
+                    m = SUPPRESSION.search(line)
+                    if m:
+                        notes.append(f"floor: {cur}: added suppression `{m[0].strip()}`")
+                    m = TEST_SKIP.search(line)
+                    if m:
+                        notes.append(f"floor: {cur}: added test skip `{m[0].strip()}`")
+                if ASSERT_LINE.search(line):
+                    added_asserts[cur] = added_asserts.get(cur, 0) + 1
+            elif raw.startswith("-") and not raw.startswith("---"):
+                if ASSERT_LINE.search(raw[1:]):
+                    removed_asserts[cur] = removed_asserts.get(cur, 0) + 1
+    for p in untracked:
+        if p in own or p.endswith(".md") or not (top / p).is_file():
+            continue
+        for line in (top / p).read_text(encoding="utf-8", errors="replace").splitlines():
+            if "floor:" in line:
+                continue
+            m = SUPPRESSION.search(line)
+            if m:
+                notes.append(f"floor: {p}: added suppression `{m[0].strip()}`")
+            m = TEST_SKIP.search(line)
+            if m:
+                notes.append(f"floor: {p}: added test skip `{m[0].strip()}`")
+            if ASSERT_LINE.search(line):
+                added_asserts[p] = added_asserts.get(p, 0) + 1
+    for p in sorted(removed_asserts):
+        rem, add = removed_asserts[p], added_asserts.get(p, 0)
+        if rem > add:
+            notes.append(f"floor: {p}: removed {rem - add} assertion(s) ({rem} removed, {add} added)")
+    return notes
+
+
 def run_checks(tasks, top):
     """(notes, gaps) from running each distinct check of the live tasks once, in the plan's order."""
     def seconds(name, default):
@@ -254,6 +316,7 @@ def converge(plan_path, base=None, checks=False):
             notes.append(f"{t['id']} not needed: {t['not_needed']}")
         elif not any(in_contract(p, contracts[t["id"]]) for p in paths):
             gaps.append(f"{t['id']} ({t['title']}) changed none of its files")
+    notes += floor_notes(top, base, paths, own)
     proof = numbered(section(text, "Proof"), "Proof")
     result = numbered(section(text, "Result"), "Result")
     if not proof:
@@ -404,6 +467,37 @@ def self_test():
         old = repo / "intent" / "old.plan.md"
         old.write_text("## Steps\n1. x\n## Proof\n1. y\n")
         expect("converge old plan", converge(old)[1], [])
+        old.unlink()
+        # floor notes: added suppressions, added test skips, deleted test files, and net removed assertions
+        run("checkout", "-q", "--", ".")
+        run("checkout", "-qb", "floor-base", "main")
+        (repo / "intent").mkdir(exist_ok=True)
+        (repo / "src").mkdir(exist_ok=True)
+        (repo / "src" / "test_mod.py").write_text("def test_one():\n    assert 1 == 1\n    assert 2 == 2\n")
+        (repo / "src" / "test_gone.py").write_text("def test_two():\n    assert True\n")
+        run("add", ".")
+        run("commit", "-qm", "tests")
+        run("checkout", "-qb", "floor-work")
+        (repo / "src" / "test_gone.py").unlink()
+        (repo / "src" / "test_mod.py").write_text("@pytest.mark." + "skip\ndef test_one():\n    x = 1  # " + "noqa\n")
+        (repo / "src" / "untracked.ts").write_text("// @ts-" + "ignore\nit." + "skip('later', () => {})\n")
+        plan.write_text("## Tasks\n### T1 (builder) A\n- allow: `src/**`\n- check: `true`\n## Proof\n1. ok\n## Result\n1. PASS\n")
+        f_notes, f_gaps = converge(plan, base="floor-base")
+        expect("floor notes do not create gaps", f_gaps, [])
+        expect("floor notes catch deleted test, suppression, skip, and removed assertions",
+               sorted(n for n in f_notes if n.startswith("floor: ")),
+               ["floor: src/test_gone.py: removed 1 assertion(s) (1 removed, 0 added)",
+                "floor: src/test_gone.py: test file deleted",
+                "floor: src/test_mod.py: added suppression `# " + "noqa`",
+                "floor: src/test_mod.py: added test skip `@pytest.mark." + "skip`",
+                "floor: src/test_mod.py: removed 2 assertion(s) (2 removed, 0 added)",
+                "floor: src/untracked.ts: added suppression `// @ts-" + "ignore`",
+                "floor: src/untracked.ts: added test skip `it." + "skip(`"])
+        (repo / "src" / "untracked.ts").unlink()
+        (repo / "src" / "test_gone.py").write_text("def test_two():\n    assert True\n")
+        (repo / "src" / "test_mod.py").write_text("def test_one():\n    assert 1 == 1\n    assert 2 == 2\n    assert 3 == 3\n")
+        expect("floor notes silent when assertions increase and test restored",
+               [n for n in converge(plan, base="floor-base")[0] if n.startswith("floor: ")], [])
 
     if failures:
         print("FAIL: sdlc-check self-test\n  " + "\n  ".join(failures))
