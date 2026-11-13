@@ -3,7 +3,7 @@
 
 The public repo (for students) holds every file of this repo's merged main, with the rewrites in
 `public-sync.json` "replace" applied to the files each one names, except the files listed as "public_only"
-(its own CLAUDE.md, README.md and branch rule, written for that audience). Those are never written; each is
+(its own CLAUDE.md, README.md and branch rule, written for that audience, and files only the public repo holds). Those are never written; each is
 reported until it has been brought in step by hand after its internal counterpart changed (`--reviewed`).
 
   python3 scripts/sync-public.py            report what differs between internal and public main
@@ -293,7 +293,7 @@ def self_test():
         cfg = {"target": str(dst), "public_ref": "main", "source_ref": "no-such-ref",
                "replace": [{"from": "~/work/in/repo", "to": "~/work/pub/repo", "paths": ["rores/*"]},
                            {"from": "secret-name", "to": "a name", "paths": ["intent/*.md"]}],
-               "public_only": ["CLAUDE.md", "README.md", "RULES.md"],
+               "public_only": ["CLAUDE.md", "README.md", "RULES.md", "PUB.md"],
                "leak_patterns": ["gh" + "p_[A-Za-z0-9]{20}", "secret-" + "name"]}
         (src / CONFIG).write_text(json.dumps(cfg))
         (src / "rores").mkdir()
@@ -311,6 +311,7 @@ def self_test():
         sh(src, "commit", "-qm", "one")
         (dst / "CLAUDE.md").write_text("public rules\n")
         (dst / "README.md").write_text("public readme\n")
+        (dst / "PUB.md").write_text("only the public repo has this\n")
         (dst / "old.md").write_text("gone soon\n")
         (dst / "plain.py").write_text("x = 1\n")
         os.chmod(dst / "plain.py", 0o755)
@@ -324,7 +325,7 @@ def self_test():
         sh(dst, "add", "-A")
         sh(dst, "commit", "-qm", "pub")
         rc, text = report()
-        for want in ("add     rores/g.md", "delete  old.md", "mode    plain.py", "review  CLAUDE.md"):
+        for want in ("add     rores/g.md", "delete  old.md", "mode    plain.py", "review  CLAUDE.md", "review  PUB.md"):
             if want not in text:
                 problems.append(f"first report lacks {want!r}: {text!r}")
         if "RULES.md" in text:
@@ -364,9 +365,11 @@ def self_test():
             problems.append("directory not replaced by the source's file")
         if (dst / "CLAUDE.md").read_text() != "public rules\n" or (dst / CONFIG).exists():
             problems.append("public-only file overwritten or config published")
+        if not (dst / "PUB.md").exists() or (dst / "PUB.md").read_text() != "only the public repo has this\n":
+            problems.append("public-only file held only by the public repo deleted or changed")
         (dst / "README.md").write_text("public readme, brought in step by hand\n")
         try:
-            run(src, None, reviewed=["CLAUDE.md", "README.md"], out=quiet, source_ref="main")
+            run(src, None, reviewed=["CLAUDE.md", "README.md", "PUB.md"], out=quiet, source_ref="main")
         except Refused as e:
             problems.append(f"--reviewed refused before the commit, with only hand edits pending: {e}")
         if (dst / "README.md").read_text() != "public readme, brought in step by hand\n":
