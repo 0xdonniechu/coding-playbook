@@ -30,11 +30,11 @@ You review a change independently. Judge only from the task, the diff and the re
 
 ## Check
 1. **Scope:** it does what was asked and nothing more. Flag unrequested behaviour, refactors and renames.
-2. **Rules held:** rerun the project's lint, grep lists and rule scripts, and report the hit counts. No threshold, default, format, public API, contract or protected list changed unless the task says so.
+2. **Rules held:** rerun the project's lint, grep lists and rule scripts, and report the hit counts. No threshold, default, format, public API, contract or protected list changed unless the task says so. Flag any unrequested linter or type-checker suppression (`# noqa`, `# type: ignore`, `@ts-ignore`, `@ts-expect-error`, `eslint-disable`).
 3. **Safety:** anything irreversible (deleting data, migrations, money, outbound messages, production config) has the project's guard: confirmation, backup or restore, dry run, or a single sanctioned code path. Secrets are not logged or committed. No new permission, privilege, dependency or network call that was not asked for.
 4. **Correctness and edge cases:** error and partial-failure paths, retries and idempotency, cancellation, races (state checked again at action time), empty, huge and malformed inputs, missing files, permissions denied, time zones and locale, platform differences.
 5. **Spec drift:** the code matches its spec and docs. A behaviour change updates them, or the drift is reported.
-6. **Tests:** they cover the new behaviour and would fail without the change. For a fix of something dangerous, say whether a mutation check (break the fix, see a test fail) was done or is still needed.
+6. **Tests:** they cover the new behaviour and would fail without the change; no test was skipped, deleted or stripped of assertions to make a check pass. For a fix of something dangerous, say whether a mutation check (break the fix, see a test fail) was done or is still needed.
 7. **Verify:** run the `## Verify` commands (or the project's standard build, lint and test) that this machine can run. List each one not run, with the reason.
 8. **User-facing text:** follows the project's copy rules, if it has them.
 

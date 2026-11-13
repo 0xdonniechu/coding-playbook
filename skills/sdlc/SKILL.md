@@ -23,7 +23,7 @@ Spec first, code after; verify layer by layer instead of reading every line.
 
 ## Phase 1: Intent (why + what)
 
-When you describe a feature or a problem, the agent asks a few sharp questions (3 to 6) until the scope is clear: technical constraints, the systems affected, what is **not** done. Then it writes `intent/<yyyy-mm-dd>-<slug>.md`:
+When you describe a feature or a problem, the agent asks a few sharp questions (3 to 6) until the scope is clear: technical constraints, the systems affected, what is **not** done. Attach your best guess (the default or recommendation from the codebase) to each question so the owner can confirm in one word. Then it writes `intent/<yyyy-mm-dd>-<slug>.md`:
 
 ```markdown
 ---
@@ -126,7 +126,7 @@ Run exactly the **Proof** items in the plan, and fill `## Result`: one numbered 
 python3 <coding-playbook>/scripts/sdlc-check.py converge intent/<yyyy-mm-dd>-<slug>.plan.md
 ```
 
-It lists each gap between the plan and the branch's diff: a changed path no task allows, a task never touched (and not marked `not needed`), a Proof item with no Result. It fails while any gap remains. A plan without `## Tasks` is reported and passes, so older plans stay valid.
+It lists each gap between the plan and the branch's diff: a changed path no task allows, a task never touched (and not marked `not needed`), a Proof item with no Result, plus `floor:` notes for any added linter/type suppression, skipped or deleted test, or net removed assertion. It fails while any gap remains. A plan without `## Tasks` is reported and passes, so older plans stay valid.
 
 The author does **not** approve their own work: it passes an independent review (`code-reviewer` or another review agent) with the intent and the plan as the contract. Give the reviewer converge's output together with the diff. Proof green → `status: verified`.
 
