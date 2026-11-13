@@ -15,7 +15,8 @@ loop.py start) whose session is the one stopping. Then, in this order:
   4. the reviewers' word, task by task: no task's last verdict may be FAIL, a Proof item that names a review needs a
      PASS for some task, and every reviewer FAIL of a task must have its `loop.py fail`. The verdicts come from the
      SubagentStop hook, which records what each run of an agent whose type ends in `reviewer` returned (the first PASS
-     or FAIL word of its last message) for each plan task named on a prompt line that starts with `loop task: T<n>`
+     or FAIL word of its last message, or, when that has none, of the report it handed back with SubagentHandback
+     after its latest prompt) for each plan task named on a prompt line that starts with `loop task: T<n>`
      (`loop tasks: T1, T2`); a verdict that names none is kept but counts for nothing, so a review of other work in the
      same session, given no marker, does not pass this run (the marker is for reviews of the open run's plan only). The run file is a plain file: this guards against haste, not against a session that sets out to
      cheat;
@@ -45,6 +46,8 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -183,16 +186,85 @@ def review_tasks(payload, plan):
     return []
 
 
+def is_prompt(entry):
+    """A user entry that is a prompt (a string, or text blocks), not a tool result: it starts a new run of the agent."""
+    if entry.get("type") != "user":
+        return False
+    content = (entry.get("message") or {}).get("content") if isinstance(entry.get("message"), dict) else None
+    if isinstance(content, str):
+        return bool(content.strip())
+    return isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "text" for b in content) \
+        and not any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+
+
+def handback_report(payload):
+    """The report a subagent handed back with a SubagentHandback tool call (the `message` input) in the run that just
+    ended: the last such call after its latest prompt, read from its transcript. A subagent that ends this way has no
+    text in its last message, so its verdict is only in this report (APS-73: two reviewer PASSes were recorded as
+    `none`). A resumed agent appends to the same transcript, so a handback before the latest prompt belongs to an
+    earlier run and never counts. Empty when there is none or anything cannot be read: no verdict, never an error."""
+    report = ""
+    try:
+        with open(str(payload.get("agent_transcript_path") or ""), encoding="utf-8", errors="replace") as f:
+            for line in f:
+                handback = '"SubagentHandback"' in line
+                if not handback and '"user"' not in line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except (ValueError, RecursionError):
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if is_prompt(entry):
+                    report = ""  # a new run starts: an earlier handback is not this run's
+                    continue
+                if not handback or entry.get("type") != "assistant" or not isinstance(entry.get("message"), dict):
+                    continue
+                content = entry["message"].get("content")
+                for block in content if isinstance(content, list) else []:
+                    if (isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "SubagentHandback"
+                            and isinstance(block.get("input"), dict)):
+                        report = str(block["input"].get("message") or "")
+    except Exception:  # the hook never fails a session: anything unreadable means no verdict
+        return ""
+    return report
+
+
+def waited_handback(payload):
+    """handback_report, polled for a while. Claude Code may still be writing the agent's last transcript lines (its
+    SubagentHandback call) when SubagentStop runs: live, two handed-back PASSes were recorded as `none`, and a read of
+    the same transcripts a moment later found both reports (APS-75). LOOP_HANDBACK_WAIT seconds: 5 by default and when
+    unparsable, at most 20 (the hook has 30), 0 or less reads once."""
+    try:
+        wait = max(0.0, min(20.0, float(os.environ.get("LOOP_HANDBACK_WAIT", "5"))))
+    except ValueError:
+        wait = 5.0
+    deadline = time.monotonic() + wait
+    while True:
+        report = handback_report(payload)
+        if report or time.monotonic() >= deadline:
+            return report
+        time.sleep(0.2)
+
+
 def record_review(payload):
     """SubagentStop: a reviewer's verdict goes into the session's open run. The session cannot write it by hand
-    through loop.py, so `pass` and done rest on what a reviewer returned."""
+    through loop.py, so `pass` and done rest on what a reviewer returned: the first PASS or FAIL word of its last
+    message, or, when that has none, of the report it handed back (SubagentHandback)."""
     found = session_run(payload)
     if not found or not str(payload.get("agent_type") or "").endswith("reviewer"):
         return None  # reviewer, hard-reviewer, or a project's own code-reviewer
-    path, run = found
-    if run.get("state") != "running":
+    if found[1].get("state") != "running":
         return None
-    word = re.search(r"\b(PASS|FAIL)\b", str(payload.get("last_assistant_message") or ""))
+    # the verdict is in its last message, or else in its handback, polled while Claude Code finishes writing the
+    # transcript (APS-73, APS-75)
+    word = (re.search(r"\b(PASS|FAIL)\b", str(payload.get("last_assistant_message") or ""))
+            or re.search(r"\b(PASS|FAIL)\b", waited_handback(payload)))
+    found = session_run(payload)  # read again after the wait: another reviewer or loop.py may have written meanwhile
+    if not found or found[1].get("state") != "running":
+        return None
+    path, run = found
     reviews = [r for r in run.get("reviews") or [] if isinstance(r, dict)]
     verdict = {"agent": payload["agent_type"], "verdict": word[1] if word else "none", "at": now()}
     tasks = review_tasks(payload, Path(str(run.get("plan"))))
@@ -355,7 +427,7 @@ def self_test():
         head = ("---\nstatus: building\n---\n# Work\n\n## Tasks\n\n### T1 (main) Code\n- allow: `src/**`\n- check: `true`\n\n"
                 "### T2 (main) Docs\n- allow: `docs/**`\n- check: `true`\n\n## Proof\n\n1. it works\n\n## Result\n\n")
         plan.write_text(head, encoding="utf-8")
-        env = {**os.environ, "CLAUDE_CODE_SESSION_ID": "sess-1", "HOME": tmp, "USERPROFILE": tmp}
+        env = {**os.environ, "CLAUDE_CODE_SESSION_ID": "sess-1", "HOME": tmp, "USERPROFILE": tmp, "LOOP_HANDBACK_WAIT": "1"}
         runfile = repo / ".git" / RUN_FILE
 
         def loopcmd(*args):
@@ -409,11 +481,23 @@ def self_test():
         plan.write_text(head + "1. PASS it works\n", encoding="utf-8")
         loopcmd("fail", "T1", "naming")
         expect("an open review FAIL blocks", me, True, "T1 has a review FAIL with no PASS after it")
-        def sub(agent, message, session="sess-1", prompt="Review the change.\nloop task: T1", later=None):  # as Claude Code calls it
+        def sub(agent, message, session="sess-1", prompt="Review the change.\nloop task: T1", later=None, handback=None,
+                delay=None):  # as Claude Code calls it; delay: the ending reaches the transcript that many seconds late
             transcript = Path(tmp) / f"agent-{os.urandom(4).hex()}.jsonl"
+            # handback: the agent ends with a SubagentHandback tool call carrying its report, then its tool result
+            ending = (json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "SubagentHandback",
+                                                                               "input": {"message": handback}}]}}) + "\n"
+                      + json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": "delivered"}]}}) + "\n"
+                      if handback is not None else
+                      json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": message}]}}) + "\n")
             transcript.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n"
                                   + (json.dumps({"type": "user", "message": {"content": later}}) + "\n" if later else "")
-                                  + json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": message}]}}) + "\n")
+                                  + ("" if delay else ending))
+            if delay:  # APS-75: Claude Code may write the handback while SubagentStop already runs
+                def append_late():
+                    with open(transcript, "a", encoding="utf-8") as f:
+                        f.write(ending)
+                threading.Timer(delay, append_late).start()
             out = subprocess.run([sys.executable, __file__, "subagent-stop"], capture_output=True, text=True, timeout=60, env=env,
                                  input=json.dumps({"session_id": session, "agent_type": agent, "last_assistant_message": message,
                                                    "agent_transcript_path": str(transcript)}))
@@ -430,6 +514,41 @@ def self_test():
         sub("reviewer", "I could not read the diff.")
         if [r.get("verdict") for r in state().get("reviews", [])] != ["FAIL", "none"]:
             failures.append(f"reviewer verdicts not recorded as FAIL, none: {state().get('reviews')}")
+        # APS-73: a reviewer that hands its report back (SubagentHandback) has no text in its last message
+        sub("reviewer", "Done.", handback="")  # an empty report: still no verdict
+        sub("reviewer", "", handback="**PASS** (loop task: T1)\n\nNo BLOCKER or MAJOR.")
+        if [r.get("verdict") for r in state().get("reviews", [])][-2:] != ["none", "PASS"]:
+            failures.append(f"handed-back verdicts not recorded as none, PASS: {state().get('reviews')[-2:]}")
+        # APS-75: the handback reaches the transcript after SubagentStop started: still recorded
+        sub("reviewer", "Done.")
+        sub("reviewer", "", handback="**PASS** (late)", delay=0.5)
+        if [r.get("verdict") for r in state().get("reviews", [])][-2:] != ["none", "PASS"]:
+            failures.append(f"a late handback not recorded as PASS: {state().get('reviews')[-2:]}")
+        started = time.monotonic()
+        sub("reviewer", "", handback="**PASS** (soon)", delay=0.2)
+        if time.monotonic() - started > 0.8:  # polled, not one read after the whole wait
+            failures.append(f"a handback 0.2 s late took {time.monotonic() - started:.1f} s to record")
+        started = time.monotonic()
+        sub("reviewer", "**PASS** at once")
+        if time.monotonic() - started > 0.8:  # a verdict in the last message: no wait
+            failures.append(f"a verdict in the last message waited {time.monotonic() - started:.1f} s")
+        sub("reviewer", "Done.")
+        sub("reviewer", "I have everything for the verdict.", handback="**PASS** (text, then a late handback)", delay=0.5)
+        if [r.get("verdict") for r in state().get("reviews", [])][-2:] != ["none", "PASS"]:
+            failures.append(f"text then a late handback: not PASS: {state().get('reviews')[-1:]}")
+        # APS-75 review: a verdict written while another reviewer's hook waits is kept
+        waiting = threading.Thread(target=sub, args=("reviewer", ""))
+        waiting.start()
+        time.sleep(0.4)
+        sub("hard-reviewer", "**PASS** (written while another hook waits)")
+        waiting.join()
+        if [(r.get("agent"), r.get("verdict")) for r in state().get("reviews", [])][-2:] != [("hard-reviewer", "PASS"), ("reviewer", "none")]:
+            failures.append(f"a verdict written during another hook's wait was lost: {state().get('reviews')[-2:]}")
+        started = time.monotonic()
+        sub("reviewer", "", handback="**PASS** (too late)", delay=4)
+        if time.monotonic() - started > 3.2 or [r.get("verdict") for r in state().get("reviews", [])][-1:] != ["none"]:
+            failures.append(f"a handback later than LOOP_HANDBACK_WAIT: not none, or the hook waited past it: "
+                            f"{state().get('reviews')[-1:]}, {time.monotonic() - started:.1f} s")
         sub("reviewer", "**PASS**: no BLOCKER or MAJOR.")
         if loopcmd("pass", "T1").returncode != 0:
             failures.append("pass was refused after a reviewer PASS")
@@ -455,6 +574,52 @@ def self_test():
             if state().get("state") != "running":
                 failures.append(f"{name}: the run was closed: {state().get('closed_by')}")
         set_run(judge=str(judge))
+        # APS-73: a FAIL handed back (SubagentHandback, no text in the last message) is recorded as FAIL
+        sub("reviewer", "", handback="**FAIL**\n\n1. MAJOR: the PASS path is untested.")
+        if [r.get("verdict") for r in state().get("reviews", [])][-1:] != ["FAIL"]:
+            failures.append(f"a handed-back FAIL not recorded as FAIL: {state().get('reviews')[-1:]}")
+        # APS-73 edge cases, written as Claude Code writes an agent transcript (one JSON entry per line)
+        def raw(lines, message="", transcript_path=None):
+            transcript = transcript_path or Path(tmp) / f"agent-{os.urandom(4).hex()}.jsonl"
+            if transcript_path is None:
+                transcript.write_text("".join((l if isinstance(l, str) else json.dumps(l)) + "\n" for l in lines), encoding="utf-8")
+            subprocess.run([sys.executable, __file__, "subagent-stop"], capture_output=True, text=True, timeout=60, env=env,
+                           input=json.dumps({"session_id": "sess-1", "agent_type": "reviewer", "last_assistant_message": message,
+                                             "agent_transcript_path": str(transcript)}))
+            return (state().get("reviews") or [{}])[-1].get("verdict")
+        prompt = {"type": "user", "message": {"role": "user", "content": "Review it.\nloop task: T1"}}
+        def hb(text, kind="assistant", name="SubagentHandback"):
+            return {"type": kind, "message": {"content": [{"type": "tool_use", "name": name, "input": {"message": text}}]}}
+        result = {"type": "user", "message": {"content": [{"type": "tool_result", "content": "delivered"}]}}
+        text = lambda t: {"type": "assistant", "message": {"content": [{"type": "text", "text": t}]}}
+        for name, lines, message, want in (
+                ("two handbacks: the last one counts", [prompt, hb("FAIL: first"), result, hb("**PASS**"), result], "", "PASS"),
+                ("a resumed run with no verdict does not replay the earlier PASS",
+                 [prompt, hb("**PASS**"), result, {"type": "user", "message": {"content": "Re-review after the new commit."}},
+                  text("I found a major problem in x.py:10.")], "I found a major problem in x.py:10.", "none"),
+                ("a resumed run (text-block prompt) does not replay the earlier FAIL",
+                 [prompt, hb("**FAIL**"), result, {"type": "user", "message": {"content": [{"type": "text", "text": "Again."}]}}],
+                 "", "none"),
+                ("a resumed run's own handback counts",
+                 [prompt, hb("**FAIL**"), result, {"type": "user", "message": {"content": "Again."}}, hb("**PASS**"), result], "", "PASS"),
+                ("a bad JSON line is skipped", [prompt, '{"type": "assistant", "SubagentHandback" broken', hb("PASS")], "", "PASS"),
+                ("another tool's input is not a report", [prompt, hb("PASS", name="Bash")], "", "none"),
+                ("another tool naming SubagentHandback in its input is not a report",
+                 [prompt, {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash",
+                                                                         "input": {"message": "PASS", "note": "SubagentHandback"}}]}}], "", "none"),
+                ("a block that is not a tool_use is not a report",
+                 [prompt, {"type": "assistant", "message": {"content": [{"type": "text", "name": "SubagentHandback",
+                                                                         "input": {"message": "PASS"}}]}}], "", "none"),
+                ("a tool_use in a user entry is not the agent's", [prompt, hb("PASS", kind="user")], "", "none"),
+                ("a message that is not an object", [prompt, {"type": "assistant", "message": "SubagentHandback PASS"}], "", "none"),
+                ("the last message's word wins over the handback", [prompt, hb("PASS"), text("FAIL: one MAJOR")], "FAIL: one MAJOR", "FAIL"),
+                ("deeply nested JSON is skipped", [prompt, '{"type": "user", "x": ' + "[" * 5000 + "]" * 5000 + "}", hb("PASS")], "", "PASS")):
+            got = raw(lines, message)
+            if got != want:
+                failures.append(f"{name}: recorded {got}, expected {want}")
+        if raw([], "", transcript_path=Path(tmp) / "no-such-transcript.jsonl") != "none":
+            failures.append("a missing transcript did not record none")
+        set_run(reviews=[])
         # Tasks removed from the plan mid-run: a gap, not done
         plan.write_text("# Work\n\n## Proof\n\n1. it works\n\n## Result\n\n1. PASS\n", encoding="utf-8")
         bad.write_text("print('FAIL: converge x, 0 gap(s)')\nraise SystemExit(1)\n", encoding="utf-8")

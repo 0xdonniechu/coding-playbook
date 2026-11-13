@@ -1,8 +1,14 @@
 {
-  "internal_commit": "16fa8c9",
+  "internal_commit": "b7862bd",
   "reviewed": {
     ".claude/branch-name.json": "79964f2",
-    "CLAUDE.md": "91d3484",
-    "README.md": "79964f2"
+    "AGENTS.md": "b7862bd",
+    "CLAUDE.md": "b7862bd",
+    "GEMINI.md": "b7862bd",
+    "README.md": "b7862bd",
+    "rores/global/AGENTS.md": "b7862bd",
+    "rores/global/GEMINI.md": "b7862bd",
+    "skills/starter-kit/project-AGENTS.md": "b7862bd",
+    "skills/starter-kit/project-GEMINI.md": "b7862bd"
   }
 }
