@@ -2,11 +2,11 @@
 # Global Antigravity / Gemini instructions (installed in ~/.gemini/GEMINI.md, applies to every project)
 
 ## Model economy
-The main session runs the model with the best quality per cost for deciding, rating, gating and HARD work. It decides, rates each task, dispatches, gates, commits, merges and talks to me.
-**Current choice (2026-11-12): Gemini 4 Argon (main session) + Gemini Decision 1 (`gemini-decision-1`, with `gemini-3.5-flash-lite` fallback) as the real-time command and routing gate.**
+The main session runs the model with the best quality per cost for everyday deciding, rating, dispatching and gating, while escalating HARD implementation and MEDIUM reviews to the Code & analysis tier. It decides, rates each task, dispatches, gates, commits, merges and talks to me.
+**Current choice (2026-11-13): Gemini 4 Hydrogen (`gemini-4-hydrogen`, Everyday help) for the main session & `builder` + Gemini 4 Argon (`gemini-4-argon`, Code & analysis) for HARD work & `reviewer` + Gemini 3.1 Pro (`gemini-3.1-pro`, Detailed research — auto-upgrade to Gemini 4 Carbon `gemini-4-carbon` once released to general users) as `hard-reviewer` + Gemini Decision 1 (`gemini-decision-1`, with `gemini-3.5-flash-lite` Quick answers fallback) as the real-time command and routing gate.**
 
 Where each setting lives (`GEMINI.md` records the policy; hooks and `invoke_subagent` enforce it):
-- Main session model: selected in Antigravity (`gemini-4-argon` / `pro` tier), pinned by decision rather than changed mid-session.
+- Main session model: selected in Antigravity (`gemini-4-hydrogen` for everyday session / orchestration; `gemini-4-argon` for HARD implementation & `reviewer`), pinned by decision rather than changed ad-hoc.
 - **Gemini Decision 1 (`gemini-decision-1`)**: runs in two places:
   1. **PreToolUse Safety Gate (`~/.antigravity/hooks/gd1_hook.py`)**: intercepts every `run_command` / `bash` / `execute_command` call and classifies it with calibrated probabilities (`returnProbabilities: true`, fallback `gemini-3.5-flash-lite`):
      - `safe_read_or_dev` (confidence $\ge 0.95$) $\rightarrow$ `allow` automatically (read-only inspection, `git status`, `ls`, `cat`, local test/build).
@@ -15,11 +15,11 @@ Where each setting lives (`GEMINI.md` records the policy; hooks and `invoke_suba
   2. **Task Triage & Dispatch Gate**: before dispatching non-trivial work, use Gemini Decision 1 (or the 4-axis rubric below) to classify the task into `EASY`, `MEDIUM`, or `HARD` with calibrated confidence.
 
 Subagents (invoked via `invoke_subagent` or defined via `define_subagent` using the role specs in `~/work/0xdonniechu/coding-playbook/rores/agents/`):
-- **decision-gate** (`gemini-decision-1` / `flash_lite`): fast calibrated classification for tool safety (`PreToolUse`) and task triage (`EASY` / `MEDIUM` / `HARD`). Never edits files.
-- **builder** (`flash` / `pro`, `Workspace: "share"` when parallel): implements an approved plan step. Edits the working tree only; never commits, pushes, opens PRs, merges or updates an issue tracker.
-- **reviewer** (`pro` / `inherit`): independent review of a MEDIUM diff; returns PASS/FAIL with numbered issues. Never edits.
-- **hard-reviewer** (cross-model / `pro`, or Orca worker via `orchestration` when cross-family review is needed): independent review for HARD changes by a different model from the one that wrote them, so it does not share its blind spots.
-- **transcriber** (`flash_lite`): mechanical copying and conversion only, no judgment.
+- **decision-gate** (`gemini-decision-1` / `gemini-3.5-flash-lite` `flash_lite`): fast calibrated classification for tool safety (`PreToolUse`) and task triage (`EASY` / `MEDIUM` / `HARD`). Never edits files.
+- **builder** (Gemini 4 Hydrogen `gemini-4-hydrogen`, `high` / `flash` tier, `Workspace: "share"` when parallel): implements an approved plan step (Everyday help tier). Edits the working tree only; never commits, pushes, opens PRs, merges or updates an issue tracker.
+- **reviewer** (Gemini 4 Argon `gemini-4-argon`, `high` / `pro` tier): independent review of a MEDIUM diff written by `builder` (`gemini-4-hydrogen`); returns PASS/FAIL with numbered issues. Never edits.
+- **hard-reviewer** (Gemini 3.1 Pro `gemini-3.1-pro` Detailed research, or **Gemini 4 Carbon** `gemini-4-carbon` `high` once it replaces `3.1 Pro` in general release; or Orca worker via `orchestration` when cross-family review is needed): independent review for HARD changes written by `gemini-4-argon`, by a different model from the one that wrote them so it does not share its blind spots. When `gemini-4-carbon` ships to general users on the Detailed research tier, update this role to `gemini-4-carbon` (`high`).
+- **transcriber** (Gemini 3.5 Flash-Lite `gemini-3.5-flash-lite`, `low` / `flash_lite` Quick answers): mechanical copying and conversion only, no judgment.
 
 Subagents return concise summaries, never full file dumps: builder and transcriber at most 200 words (the builder's contract check commands not counted), reviewers at most 300 (500 for a HARD change).
 Small tasks (1-2 files, obvious change) are done directly, not dispatched.
@@ -29,9 +29,9 @@ Rate on four axes: ambiguity, coupled decisions, verifiability, cost of error. J
 - One-click undo (docs, tests, one function: a revert fixes it): low.
 - Cleanup undo (shared helpers, an interface other code calls, rules every session acts on: a revert leaves work or decisions to redo): high.
 - No undo: **HARD**, whatever the other axes say. User data lost or migrated (schema migrations included), auth or any other security boundary weakened, money moved, something published or sent, and anything else no revert takes back (a force push, a production setting, a deletion).
-- All low → **EASY**: transcriber or builder, no review.
-- One high → **MEDIUM**: builder, then reviewer.
-- Two or more high, **or** no undo → **HARD**: the main session does it directly, then hard-reviewer reviews it.
+- All low → **EASY**: transcriber (`gemini-3.5-flash-lite`) or builder (`gemini-4-hydrogen`), no review.
+- One high → **MEDIUM**: builder (`gemini-4-hydrogen`), then reviewer (`gemini-4-argon`).
+- Two or more high, **or** no undo → **HARD**: Gemini 4 Argon (`gemini-4-argon`) does it directly, then hard-reviewer (`gemini-3.1-pro`, or `gemini-4-carbon` once released) reviews it.
 Each project's `GEMINI.md` / `CLAUDE.md` lists its own HARD / MEDIUM / EASY examples; those override this default.
 
 ## The loop
