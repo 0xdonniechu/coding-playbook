@@ -2,11 +2,12 @@
 # Global Antigravity / Gemini instructions (installed in ~/.gemini/GEMINI.md, applies to every project)
 
 ## Model economy
-The main session runs the model with the best quality per cost for everyday deciding, rating, dispatching and gating, while escalating HARD implementation and MEDIUM reviews to the Code & analysis tier. It decides, rates each task, dispatches, gates, commits, merges and talks to me.
-**Current choice (2026-11-13): Gemini 4 Hydrogen (`gemini-4-hydrogen`, Everyday help) for the main session & `builder` + Gemini 4 Argon (`gemini-4-argon`, Code & analysis) for HARD work & `reviewer` + Gemini 3.1 Pro (`gemini-3.1-pro`, Detailed research — auto-upgrade to Gemini 4 Carbon `gemini-4-carbon` once released to general users) as `hard-reviewer` + Gemini Decision 1 (`gemini-decision-1`, with `gemini-3.5-flash-lite` Quick answers fallback) as the real-time command and routing gate.**
+The main session runs the model with the best quality per cost for long-horizon deciding, rating, dispatching, gating and HARD work. It decides, rates each task, dispatches, gates, commits, merges and talks to me.
+**Current choice (2026-11-14): Gemini 4 Argon (`gemini-4-argon-high`, Code & analysis) for the main session & `reviewer` + Gemini 4 Hydrogen (`gemini-4-hydrogen-high`, Everyday help) for `builder` + Gemini 4 Carbon (`gemini-4-carbon-high`, Detailed research) for `hard-reviewer` & multi-task plan audit + Gemini Decision 1 (`gemini-decision-1`, with `gemini-3.5-flash-lite` Quick answers fallback) as the real-time command and routing gate.** (Read-only Q&A with no code edits may run on `gemini-4-hydrogen-high`; if it escalates to code changes or a plan, start a new session on `gemini-4-argon-high` rather than switching mid-session or authoring MEDIUM/HARD edits on `gemini-4-hydrogen-high`.)
 
-Where each setting lives (`GEMINI.md` records the policy; hooks and `invoke_subagent` enforce it):
-- Main session model: selected in Antigravity (`gemini-4-hydrogen` for everyday session / orchestration; `gemini-4-argon` for HARD implementation & `reviewer`), pinned by decision rather than changed ad-hoc.
+Where each setting lives (`GEMINI.md` records the policy; settings, hooks and CLI flags enforce it):
+- Main session model: `"model": "Gemini 4 Argon (High)"` in `~/.gemini/antigravity-cli/settings.json` (CLI ID `gemini-4-argon-high`), set once per session and never changed mid-session.
+- Subagent & CLI pinning: pin full model IDs (`agy --model <id>` or Orca workers, never the `gemini` CLI); `invoke_subagent` is used with `Model: "inherit"` only when the subagent shares the main session's pinned model (`reviewer` on `gemini-4-argon-high` with `TypeName: "research"`), never via unpinned `flash` / `pro` aliases. Read-only reviews and plan audits run with `agy -p "<prompt>" --mode plan --settings '{"permissions":{"allow":["command(*)"]}}' --model <id>` so file edits stay blocked while `gd1_hook.py` auto-allows `safe_read_or_dev` checks and headless mode auto-denies any `risky_modify` `"ask"` or `destructive_danger` `"deny"`.
 - **Gemini Decision 1 (`gemini-decision-1`)**: runs in two places:
   1. **PreToolUse Safety Gate (`~/.antigravity/hooks/gd1_hook.py`)**: intercepts every `run_command` / `bash` / `execute_command` call and classifies it with calibrated probabilities (`returnProbabilities: true`, fallback `gemini-3.5-flash-lite`):
      - `safe_read_or_dev` (confidence $\ge 0.95$) $\rightarrow$ `allow` automatically (read-only inspection, `git status`, `ls`, `cat`, local test/build).
@@ -14,27 +15,28 @@ Where each setting lives (`GEMINI.md` records the policy; hooks and `invoke_suba
      - `risky_modify` or lower confidence $\rightarrow$ `ask` for manual Y/N confirmation in the CLI (`pip install`, config edits, `git push`, system state changes).
   2. **Task Triage & Dispatch Gate**: before dispatching non-trivial work, use Gemini Decision 1 (or the 4-axis rubric below) to classify the task into `EASY`, `MEDIUM`, or `HARD` with calibrated confidence.
 
-Subagents (invoked via `invoke_subagent` or defined via `define_subagent` using the role specs in `~/work/0xdonniechu/coding-playbook/rores/agents/`):
-- **decision-gate** (`gemini-decision-1` / `gemini-3.5-flash-lite` `flash_lite`): fast calibrated classification for tool safety (`PreToolUse`) and task triage (`EASY` / `MEDIUM` / `HARD`). Never edits files.
-- **builder** (Gemini 4 Hydrogen `gemini-4-hydrogen`, `high` / `flash` tier, `Workspace: "share"` when parallel): implements an approved plan step (Everyday help tier). Edits the working tree only; never commits, pushes, opens PRs, merges or updates an issue tracker.
-- **reviewer** (Gemini 4 Argon `gemini-4-argon`, `high` / `pro` tier): independent review of a MEDIUM diff written by `builder` (`gemini-4-hydrogen`); returns PASS/FAIL with numbered issues. Never edits.
-- **hard-reviewer** (Gemini 3.1 Pro `gemini-3.1-pro` Detailed research, or **Gemini 4 Carbon** `gemini-4-carbon` `high` once it replaces `3.1 Pro` in general release; or Orca worker via `orchestration` when cross-family review is needed): independent review for HARD changes written by `gemini-4-argon`, by a different model from the one that wrote them so it does not share its blind spots. When `gemini-4-carbon` ships to general users on the Detailed research tier, update this role to `gemini-4-carbon` (`high`).
-- **transcriber** (Gemini 3.5 Flash-Lite `gemini-3.5-flash-lite`, `low` / `flash_lite` Quick answers): mechanical copying and conversion only, no judgment.
+Subagents (dispatched with pinned full model IDs via `agy --model <id>`, Orca workers, or `invoke_subagent` `Model: "inherit"` when matching the main session's pin, using the role specs in `~/work/0xdonniechu/coding-playbook/rores/agents/`):
+- **decision-gate** (`gemini-decision-1`, fallback `gemini-3.5-flash-lite`): fast calibrated classification for tool safety (`PreToolUse`) and task triage (`EASY` / `MEDIUM` / `HARD`). Never edits files.
+- **builder** (Gemini 4 Hydrogen `gemini-4-hydrogen-high`): implements an approved plan step (`dispatch.py new` worktree when parallel, or `dispatch.py contract` when single). Edits the working tree only; never commits, pushes, opens PRs, merges or updates an issue tracker.
+- **reviewer** (Gemini 4 Argon `gemini-4-argon-high`, read-only `--mode plan` or `TypeName: "research"` `Model: "inherit"`): independent review in a fresh context of a MEDIUM diff written solely by `builder` (`gemini-4-hydrogen-high`); returns PASS/FAIL with numbered issues. Never edits. Any diff touched directly by the main session (`gemini-4-argon-high`) must go to `hard-reviewer` (`gemini-4-carbon-high`), never `reviewer` (no self-review).
+- **hard-reviewer** (Gemini 4 Carbon `gemini-4-carbon-high`, read-only `--mode plan`; plus an Orca cross-family worker via `orchestration` when cross-family review is needed on no-undo changes): independent review for HARD changes, any diff touched directly by the main session (`gemini-4-argon-high`), and pre-loop audit of multi-task plans before builders are dispatched, so planner and author blind spots are caught by a stronger, different model. Never edits.
+- **transcriber** (Gemini 3.5 Flash-Lite `gemini-3.5-flash-lite` or `gemini-4-hydrogen-low`): mechanical copying and conversion only, no judgment.
 
 Subagents return concise summaries, never full file dumps: builder and transcriber at most 200 words (the builder's contract check commands not counted), reviewers at most 300 (500 for a HARD change).
-Small tasks (1-2 files, obvious change) are done directly, not dispatched.
+Small tasks (1-2 files, obvious change) are done directly, not dispatched; if rated MEDIUM or HARD, their diff goes to `hard-reviewer` (`gemini-4-carbon-high`) because the main session (`gemini-4-argon-high`) wrote it.
 
 ## Task rating (do this before dispatching, assisted by Gemini Decision 1)
 Rate on four axes: ambiguity, coupled decisions, verifiability, cost of error. Judge the cost of error by what undoing it takes, never by how sure the model is (owner decision 2026-11-11):
 - One-click undo (docs, tests, one function: a revert fixes it): low.
 - Cleanup undo (shared helpers, an interface other code calls, rules every session acts on: a revert leaves work or decisions to redo): high.
 - No undo: **HARD**, whatever the other axes say. User data lost or migrated (schema migrations included), auth or any other security boundary weakened, money moved, something published or sent, and anything else no revert takes back (a force push, a production setting, a deletion).
-- All low → **EASY**: transcriber (`gemini-3.5-flash-lite`) or builder (`gemini-4-hydrogen`), no review.
-- One high → **MEDIUM**: builder (`gemini-4-hydrogen`), then reviewer (`gemini-4-argon`).
-- Two or more high, **or** no undo → **HARD**: Gemini 4 Argon (`gemini-4-argon`) does it directly, then hard-reviewer (`gemini-3.1-pro`, or `gemini-4-carbon` once released) reviews it.
+- All low → **EASY**: transcriber (`gemini-3.5-flash-lite`) or builder (`gemini-4-hydrogen-high`), no review.
+- One high → **MEDIUM**: builder (`gemini-4-hydrogen-high`), then reviewer (`gemini-4-argon-high`; or `hard-reviewer` `gemini-4-carbon-high` if the main session edited any file in the diff).
+- Two or more high, **or** no undo → **HARD**: the main session (`gemini-4-argon-high`) does it directly, then hard-reviewer (`gemini-4-carbon-high`) reviews it.
 Each project's `GEMINI.md` / `CLAUDE.md` lists its own HARD / MEDIUM / EASY examples; those override this default.
 
 ## The loop
+- **Pre-loop plan audit**: before dispatching builders or starting a one-prompt run on a multi-task plan, run a single-turn audit on `gemini-4-carbon-high` (given the intent, the plan and the touched files, not the main session's rationale) to catch spec gaps, coupled side effects and missing contract checks upfront.
 - Every builder dispatch carries a task contract, written with `scripts/dispatch.py` in the coding-playbook repo (`~/work/0xdonniechu/coding-playbook`): `new <repo> <branch> --allow … --check …` gives a builder that runs beside another its own worktree and contract; `contract <tree> --allow … --check …` serves a single builder in the main checkout. The main session reruns the contract's checks as its gate before review, judges an `OUTSIDE CONTRACT` report before anything else, and runs `dispatch.py done <tree>` when the work is committed.
 - When the plan has a `## Tasks` section (the sdlc skill), a builder's contract comes from its task: `dispatch.py new <repo> <branch> --task <plan> <id>` (or `contract <tree> --task …`), not from flags typed again.
 - Before the review of a plan's build, `scripts/sdlc-check.py converge <plan>` lists every changed file outside the plan's tasks, every task left untouched and every Proof item without a result; the reviewer gets its output with the diff. `sdlc-check.py clarify <intent>` fails while an intent still has an open point.

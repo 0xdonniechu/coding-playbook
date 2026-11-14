@@ -17,17 +17,17 @@ These commands are the default checks of a builder's task contract (`dispatch.py
   - `risky_modify` (or lower confidence): ask for manual confirmation (`git push`, package install, service restart, config/schema changes).
 - **Task Triage**: Before dispatching, rate on the 4 axes (ambiguity, coupled decisions, verifiability, undo cost) with Gemini Decision 1 against the project's `HARD` / `MEDIUM` / `EASY` boundaries below.
 
-## HARD: Gemini 4 Argon (`gemini-4-argon`, `high`) does it directly, then hard-reviewer (`gemini-3.1-pro`, or `gemini-4-carbon` `high` once released)
+## HARD: the main session (`gemini-4-argon-high`) does it directly, then hard-reviewer (`gemini-4-carbon-high`)
 - <The code that decides the core behaviour, where a wrong answer is silent>
 - <Anything that deletes, migrates, pays, sends, or cannot be undone>
 - <Credentials, auth, keys and how they are loaded>
 - <Cross-component contracts, formats and test vectors>
 
-## MEDIUM: builder (`gemini-4-hydrogen`, `high`) builds, reviewer (`gemini-4-argon`, `high`) reviews
+## MEDIUM: builder (`gemini-4-hydrogen-high`) builds, reviewer (`gemini-4-argon-high`) reviews (escalate to `gemini-4-carbon-high` if main touched the diff)
 - <New integrations, channels, retries and rate limits, scheduling, storage outside the HARD core>
 - <A bug with a clear stack trace outside the HARD areas>
 
-## EASY: transcriber (`gemini-3.5-flash-lite`, `low`) or builder (`gemini-4-hydrogen`), no review
+## EASY: transcriber (`gemini-3.5-flash-lite`, `low`) or builder (`gemini-4-hydrogen-high`), no review
 - <Wording, formatting, reports from stored data, README and docstrings, renames, log cleanup>
 
 ## Rules
