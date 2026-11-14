@@ -14,7 +14,7 @@ The subagent roles (decision-gate, builder, reviewer, hard-reviewer, transcriber
   - `risky_modify` ($\rightarrow$ `ask`): `python3 scripts/install.py --global --settings`, `git push`, modifying global hooks.
 - **Task Triage**: Classify every change on the 4 axes (ambiguity, coupled decisions, verifiability, undo cost) with Gemini Decision 1 against the `HARD` / `MEDIUM` / `EASY` boundaries below.
 
-## HARD: Gemini 4 Argon (`gemini-4-argon`, `high`) does it directly, then hard-reviewer (`gemini-3.1-pro`, or `gemini-4-carbon` `high` once released)
+## HARD: the main session (`gemini-4-argon-high`) does it directly, then hard-reviewer (`gemini-4-carbon-high`)
 - The model choice, Gemini Decision 1 thresholds (`0.95` allow / `0.70` deny), and switching: the "Current choice" line, any agent's `model:` or `effort:`, `scripts/switch-model.py`.
 - Task rating (EASY / MEDIUM / HARD), the review loop, who may commit or merge, the honesty rules.
 - The reviewers' checklist and their PASS/FAIL rule.
@@ -23,12 +23,12 @@ The subagent roles (decision-gate, builder, reviewer, hard-reviewer, transcriber
 - `gates/session-gates.py` and `.claude/branch-name.json`.
 - The installer's writes to `~/.claude` and `~/.gemini`.
 
-## MEDIUM: builder (`gemini-4-hydrogen`, `high`) builds, reviewer (`gemini-4-argon`, `high`) reviews
+## MEDIUM: builder (`gemini-4-hydrogen-high`) builds, reviewer (`gemini-4-argon-high`) reviews (escalate to `gemini-4-carbon-high` if main touched the diff)
 - Builder and transcriber wording that changes what they do or when they stop; the template's sections; a skill's steps or stop points; `scripts/check.py`; `scripts/sdlc-check.py`.
 - Shortening or rewording global instructions or a skill without changing a rule.
 - `graph/graph-hook.py`, `docs/internals.md`, `scripts/plane.py`, `scripts/progress-diagram.py`, `scripts/hil-report.py`, `scripts/cost-report.py`.
 
-## EASY: transcriber (`gemini-3.5-flash-lite`, `low`) or builder (`gemini-4-hydrogen`), no review
+## EASY: transcriber (`gemini-3.5-flash-lite`, `low`) or builder (`gemini-4-hydrogen-high`), no review
 - README wording, typos, examples that do not change a rule, intent and plan status lines that record work done.
 
 ## Rules
